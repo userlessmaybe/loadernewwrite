@@ -1127,12 +1127,18 @@ gameApi.SetupSecureCall = function()
 		return
 	end
 	if ATLAS_LIMITED then
-		-- Xeno/Solara: do not spawn a thread and do not touch identity.
-		-- Spawned threads inherit an identity that cannot require RobloxScript
-		-- modules, which makes every game module (Quests, StatReqs, Activatables,
-		-- RainbowPartAnimator, ...) spam "Cannot require a RobloxScript module".
-		-- Calling directly keeps the executor's own identity (>= 8).
+		-- Xeno/Solara: call directly (a spawned thread inherits an identity that
+		-- cannot require RobloxScript modules), but force identity 8 first so the
+		-- call always runs in the same context the game modules expect.
 		secureCall = function(n, ...)
+			if type(n) ~= "function" then
+				-- a module that failed to load leaves gameApi.<x> = nil; without
+				-- this guard the calling thread dies with "attempt to call a nil value"
+				return nil
+			end
+			if type(setthreadidentity) == "function" then
+				pcall(setthreadidentity, 8)
+			end
 			return n(...)
 		end
 		return
@@ -1292,14 +1298,20 @@ gameApi.Setup = function(api)
 		warn("[Atlas] setup error: " .. tostring(setupError))
 	end
 
-	local missing = 0
-	for _, key in ipairs({ "ClientStatCache", "Quests", "Events", "ItemPackages", "LocalPlanters" }) do
+	local missingNames = {}
+	for _, key in ipairs({
+		"ClientStatCache", "Quests", "Events", "ItemPackages", "LocalPlanters",
+		"LocalCollect", "Badges", "CyclingShopTools", "StickerStack", "BuffTile",
+		"MemoryMatch", "MemoryMatchManager", "ClientMonsterTools", "RoboBearGuiClose",
+		"GateManager", "Blender", "EggTypes", "StatReqs", "BeeMutations", "Amulets",
+		"StatModifiers", "BeeStatMods", "WaxTypes", "Hives", "NPCs", "Shops", "Toys", "ToysText",
+	}) do
 		if api[key] == nil then
-			missing += 1
+			table.insert(missingNames, key)
 		end
 	end
-	if missing > 0 then
-		warn("[Atlas] " .. tostring(missing) .. " core module(s) unavailable, some features will be disabled")
+	if #missingNames > 0 then
+		warn("[Atlas] unavailable modules (" .. tostring(#missingNames) .. "): " .. table.concat(missingNames, ", "))
 	end
 end
 gameApi.Cache = function(api, ...)
@@ -1485,7 +1497,15 @@ serializeTable = function(value, depth)
 	return table.concat(lines, "\n")
 end
 threads.Add = function(manager, threadId, callback)
-	local thread = task.spawn(callback)
+	local thread = task.spawn(function(...)
+		-- Xeno/Solara: task.spawn threads start below identity 8, and any game
+		-- module touched from them binds its own loops at that identity, which
+		-- then floods the console with "Cannot require a RobloxScript module".
+		if ATLAS_LIMITED and type(setthreadidentity) == "function" then
+			pcall(setthreadidentity, 8)
+		end
+		return callback(...)
+	end)
 	if thread then
 		manager.list[threadId] = thread
 	end
@@ -28208,9 +28228,21 @@ do
 				Farming.AddSwitch("Auto Dig", function(n)
 					if n and not threads:Get("autodig") then
 						threads:Add("autodig", function()
+							local warned = false
 							while RunService.Heartbeat:Wait() do
 								if not state.stop and not state.stopdig then
-									secureCall(gameApi.LocalCollect)
+									if type(gameApi.LocalCollect) == "function" then
+										local okDig, digError = pcall(function()
+											secureCall(gameApi.LocalCollect)
+										end)
+										if not okDig and not warned then
+											warned = true
+											warn("[Atlas] auto dig failed: " .. tostring(digError))
+										end
+									elseif not warned then
+										warned = true
+										warn("[Atlas] auto dig disabled: Collectors.LocalCollect is not loaded")
+									end
 									task.wait(0.1)
 								end
 							end
