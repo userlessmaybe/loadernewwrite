@@ -1,32 +1,65 @@
 -- Atlas 1.2 Xeno Support
-if _G.loading and _G.atlas and _G.atlas.Parent then return end
-_G.loading = true
-_G.loadingAt = os.clock()
--- executor compatibility shims (Xeno / Solara and other limited executors)
-local atlasEnv = (type(getgenv) == "function" and getgenv()) or _G
-local function atlasShim(name, fallback)
-	if type(atlasEnv[name]) ~= "function" then
-		atlasEnv[name] = fallback
+-- executor detection: compatibility layer only for Xeno / Solara
+local atlasExecutorName = ""
+do
+	local ok, name = pcall(function()
+		if type(identifyexecutor) == "function" then
+			return identifyexecutor()
+		end
+		return ""
+	end)
+	if ok and type(name) == "string" then
+		atlasExecutorName = name
 	end
 end
-atlasShim("newcclosure", function(fn) return fn end)
-atlasShim("isfunctionhooked", function() return false end)
-atlasShim("setthreadidentity", function() end)
-atlasShim("getthreadidentity", function() return 8 end)
-atlasShim("getconnections", function() return {} end)
-atlasShim("fireclickdetector", function() end)
-atlasShim("restorefunction", function() end)
-atlasShim("hookfunction", function(original) return original end)
-if type(atlasEnv.gethui) ~= "function" then
-	atlasEnv.gethui = function() return nil end
-end
+local atlasExecLower = string.lower(atlasExecutorName)
+local ATLAS_LIMITED = _G.atlasForceCompat == true
+	or string.find(atlasExecLower, "xeno", 1, true) ~= nil
+	or string.find(atlasExecLower, "solara", 1, true) ~= nil
+local ATLAS_SECURE_IDENTITY = ATLAS_LIMITED and 8 or 5
 
-if type(getthreadidentity) == "function" and getthreadidentity() < 8 then
-	local okSC = pcall(function()
-		game:GetService("StarterGui"):SetCore("SendNotification", { Title = "Warning", Text = "Your executor identity is below 8, some features may fail.", Duration = 10 })
-	end)
-	if not okSC then
-		warn("[Atlas] executor identity below 8, continuing anyway")
+if ATLAS_LIMITED then
+	if _G.loading and _G.atlas and _G.atlas.Parent then
+		return
+	end
+else
+	if _G.loading then
+		return
+	end
+end
+_G.loading = true
+_G.loadingAt = os.clock()
+
+if ATLAS_LIMITED then
+	local atlasEnv = (type(getgenv) == "function" and getgenv()) or _G
+	local function atlasShim(name, fallback)
+		if type(atlasEnv[name]) ~= "function" then
+			atlasEnv[name] = fallback
+		end
+	end
+	atlasShim("newcclosure", function(fn) return fn end)
+	atlasShim("isfunctionhooked", function() return false end)
+	atlasShim("setthreadidentity", function() end)
+	atlasShim("getthreadidentity", function() return 8 end)
+	atlasShim("getconnections", function() return {} end)
+	atlasShim("fireclickdetector", function() end)
+	atlasShim("restorefunction", function() end)
+	atlasShim("hookfunction", function(original) return original end)
+	if type(atlasEnv.gethui) ~= "function" then
+		atlasEnv.gethui = function() return nil end
+	end
+
+	if type(getthreadidentity) == "function" and getthreadidentity() < 8 then
+		local okSC = pcall(function()
+			game:GetService("StarterGui"):SetCore("SendNotification", { Title = "Warning", Text = "Your executor identity is below 8, some features may fail.", Duration = 10 })
+		end)
+		if not okSC then
+			warn("[Atlas] executor identity below 8, continuing anyway")
+		end
+	end
+else
+	if not getthreadidentity or getthreadidentity() < 8 then
+		return (cloneref and cloneref(game:GetService("StarterGui")) or game:GetService("StarterGui")):SetCore("SendNotification", { Title = "Warning", Text = "Your executor is not supported.", Duration = 10 })
 	end
 end
 while not game:IsLoaded() do
@@ -41,23 +74,25 @@ local UserInputService = getService("UserInputService")
 local TeleportService = getService("TeleportService")
 local PlayersService = getService("Players")
 local localPlayer = PlayersService.LocalPlayer
-do
-	local waitStart = os.clock()
-	while not localPlayer and os.clock() - waitStart < 30 do
-		task.wait(0.1)
-		localPlayer = PlayersService.LocalPlayer
+if ATLAS_LIMITED then
+	do
+		local waitStart = os.clock()
+		while not localPlayer and os.clock() - waitStart < 30 do
+			task.wait(0.1)
+			localPlayer = PlayersService.LocalPlayer
+		end
 	end
-end
-if not localPlayer then
-	warn("[Atlas] LocalPlayer is nil, aborting")
-	return
+	if not localPlayer then
+		warn("[Atlas] LocalPlayer is nil, aborting")
+		return
+	end
 end
 local TweenService = getService("TweenService")
 local HttpService = getService("HttpService")
 local VirtualUser = getService("VirtualUser")
 local RunService = getService("RunService")
 local Lighting = getService("Lighting")
-do
+if ATLAS_LIMITED then
 	local waitStart = os.clock()
 	while not localPlayer.PlayerGui:FindFirstChild("LoadingScreenGui")
 		or (localPlayer.PlayerGui.LoadingScreenGui:FindFirstChild("LoadingMessage")
@@ -65,6 +100,10 @@ do
 		if os.clock() - waitStart > 15 then
 			break
 		end
+		RunService.Heartbeat:Wait()
+	end
+else
+	while not localPlayer.PlayerGui:FindFirstChild("LoadingScreenGui") or localPlayer.PlayerGui.LoadingScreenGui.LoadingMessage.Visible do
 		RunService.Heartbeat:Wait()
 	end
 end
@@ -85,11 +124,14 @@ if game.PlaceId == 15579077077 then
 end
 if game.PlaceId ~= 1537690962 then
 	local StarterGui = getService("StarterGui")
-	pcall(function()
-		StarterGui:SetCore("SendNotification", { Title = "Warning", Text = "You're not in Bee Swarm Simulator.", Duration = 5 })
-	end)
-	warn("[Atlas] not in Bee Swarm Simulator (PlaceId " .. tostring(game.PlaceId) .. ")")
-	return
+	if ATLAS_LIMITED then
+		pcall(function()
+			StarterGui:SetCore("SendNotification", { Title = "Warning", Text = "You're not in Bee Swarm Simulator.", Duration = 5 })
+		end)
+		warn("[Atlas] not in Bee Swarm Simulator (PlaceId " .. tostring(game.PlaceId) .. ")")
+		return
+	end
+	return StarterGui:SetCore("SendNotification", { Title = "Warning", Text = "You're not in Bee Swarm Simulator.", Duration = 5 })
 end
 if identifyexecutor then
 	print(identifyexecutor())
@@ -1072,7 +1114,9 @@ gameApi.SetupSecureCall = function()
 			local q
 			threadCount += 1
 			threads.list[threadCount] = task.spawn(function(...)
-				setthreadidentity(5)
+				-- identity 5 cannot require RobloxScript modules -> game modules spam errors
+				-- 8 keeps require() working; change to 5 only if you need to mimic a LocalScript
+				setthreadidentity(ATLAS_SECURE_IDENTITY)
 				Z, p = pcall(function(...)
 					return table.pack(n(...))
 				end, ...)
@@ -1089,41 +1133,124 @@ gameApi.SetupSecureCall = function()
 	end
 end
 gameApi.Setup = function(api)
-	api.Events = ReplicatedStorage.Events
-	api.Badges = require(ReplicatedStorage.Badges)
-	api.ItemPackages = require(ReplicatedStorage.ItemPackages)
-	api.ClientStatCache = require(ReplicatedStorage.ClientStatCache)
-	api.CyclingShopTools = require(ReplicatedStorage.ShopTools.CyclingShopTools)
-	api.StickerStack = require(ReplicatedStorage.StickerStack)
-	api.Quests = require(ReplicatedStorage.Quests)
-	api.BuffTile = require(ReplicatedStorage.Gui.TileDisplay.BuffTile).GetBuffTile
-	api.MemoryMatch = require(ReplicatedStorage.Gui.MemoryMatch).RegisterTileSelected
-	api.LocalCollect = require(ReplicatedStorage.Collectors.LocalCollect).Run
-	api.LocalPlanters = require(ReplicatedStorage.LocalPlanters).CheckForNearbyHarvestablePlanters
-	api.MemoryMatchManager = require(ReplicatedStorage.MemoryMatchManager).SetActiveGame
-	api.ClientMonsterTools = require(ReplicatedStorage.ClientMonsterTools).GetSpawnerCooldown
-	api.RoboBearGuiClose = require(ReplicatedStorage.Gui.RoboBearGui).ClosePromptBox
-	api.GateManager = require(ReplicatedStorage.GateManager).UpdateGateColors
-	api.Blender = require(ReplicatedStorage.BlenderRecipes).Get
-	api.EggTypes = require(ReplicatedStorage.EggTypes).GetTypes
-	api.StatReqs = require(ReplicatedStorage.StatReqs).Check
-	api.BeeMutations = require(ReplicatedStorage.BeeStats.BeeMutations)
-	api.Amulets = require(game.ReplicatedStorage.Amulets).ModsDescription
-	api.StatModifiers = require(ReplicatedStorage.StatModifiers).Description
-	api.BeeStatMods = require(ReplicatedStorage.BeeStats.BeeStatMods).GetType
-	api.WaxTypes = require(game.ReplicatedStorage.WaxTypes).ByID
-	local activatables = ReplicatedStorage.Activatables
-	api.Hives = require(activatables.Hives).ButtonEffect
-	api.NPCs = require(activatables.NPCs).ButtonEffect
-	api.Shops = require(activatables.Shops).ButtonEffect
-	api.Toys = require(activatables.Toys).ButtonEffect
-	api.ToysText = require(activatables.Toys).ButtonText
-	secureCall(api.LocalCollect)
-	if type(debug.getupvalue(api.LocalPlanters, 1)) ~= "table" then
-		error("debug.getupvalue failed")
+	if not ATLAS_LIMITED then
+		api.Events = ReplicatedStorage.Events
+		api.Badges = require(ReplicatedStorage.Badges)
+		api.ItemPackages = require(ReplicatedStorage.ItemPackages)
+		api.ClientStatCache = require(ReplicatedStorage.ClientStatCache)
+		api.CyclingShopTools = require(ReplicatedStorage.ShopTools.CyclingShopTools)
+		api.StickerStack = require(ReplicatedStorage.StickerStack)
+		api.Quests = require(ReplicatedStorage.Quests)
+		api.BuffTile = require(ReplicatedStorage.Gui.TileDisplay.BuffTile).GetBuffTile
+		api.MemoryMatch = require(ReplicatedStorage.Gui.MemoryMatch).RegisterTileSelected
+		api.LocalCollect = require(ReplicatedStorage.Collectors.LocalCollect).Run
+		api.LocalPlanters = require(ReplicatedStorage.LocalPlanters).CheckForNearbyHarvestablePlanters
+		api.MemoryMatchManager = require(ReplicatedStorage.MemoryMatchManager).SetActiveGame
+		api.ClientMonsterTools = require(ReplicatedStorage.ClientMonsterTools).GetSpawnerCooldown
+		api.RoboBearGuiClose = require(ReplicatedStorage.Gui.RoboBearGui).ClosePromptBox
+		api.GateManager = require(ReplicatedStorage.GateManager).UpdateGateColors
+		api.Blender = require(ReplicatedStorage.BlenderRecipes).Get
+		api.EggTypes = require(ReplicatedStorage.EggTypes).GetTypes
+		api.StatReqs = require(ReplicatedStorage.StatReqs).Check
+		api.BeeMutations = require(ReplicatedStorage.BeeStats.BeeMutations)
+		api.Amulets = require(game.ReplicatedStorage.Amulets).ModsDescription
+		api.StatModifiers = require(ReplicatedStorage.StatModifiers).Description
+		api.BeeStatMods = require(ReplicatedStorage.BeeStats.BeeStatMods).GetType
+		api.WaxTypes = require(game.ReplicatedStorage.WaxTypes).ByID
+		local activatables = ReplicatedStorage.Activatables
+		api.Hives = require(activatables.Hives).ButtonEffect
+		api.NPCs = require(activatables.NPCs).ButtonEffect
+		api.Shops = require(activatables.Shops).ButtonEffect
+		api.Toys = require(activatables.Toys).ButtonEffect
+		api.ToysText = require(activatables.Toys).ButtonText
+		secureCall(api.LocalCollect)
+		if type(debug.getupvalue(api.LocalPlanters, 1)) ~= "table" then
+			error("debug.getupvalue failed")
+		end
+		if not getconnections(gameGui.Dialog.ButtonOverlay.MouseButton1Click)[1].Function then
+			error("getconnections failed")
+		end
+		return
 	end
-	if not getconnections(gameGui.Dialog.ButtonOverlay.MouseButton1Click)[1].Function then
-		error("getconnections failed")
+
+	local prevIdentity = type(getthreadidentity) == "function" and getthreadidentity() or 8
+	if type(setthreadidentity) == "function" and prevIdentity < ATLAS_SECURE_IDENTITY then
+		setthreadidentity(ATLAS_SECURE_IDENTITY)
+	end
+
+	local function safeRequire(path, field)
+		local ok, res = pcall(function()
+			return require(path)
+		end)
+		if not ok then
+			warn("[Atlas] require failed: " .. tostring(path) .. " -> " .. tostring(res))
+			return nil
+		end
+		if field == nil then
+			return res
+		end
+		local okField, value = pcall(function()
+			return res[field]
+		end)
+		if not okField then
+			warn("[Atlas] field missing: " .. tostring(field) .. " on " .. tostring(path))
+			return nil
+		end
+		return value
+	end
+
+	api.Events = ReplicatedStorage.Events
+	api.Badges = safeRequire(ReplicatedStorage.Badges)
+	api.ItemPackages = safeRequire(ReplicatedStorage.ItemPackages)
+	api.ClientStatCache = safeRequire(ReplicatedStorage.ClientStatCache)
+	api.CyclingShopTools = safeRequire(ReplicatedStorage.ShopTools.CyclingShopTools)
+	api.StickerStack = safeRequire(ReplicatedStorage.StickerStack)
+	api.Quests = safeRequire(ReplicatedStorage.Quests)
+	api.BuffTile = safeRequire(ReplicatedStorage.Gui.TileDisplay.BuffTile, "GetBuffTile")
+	api.MemoryMatch = safeRequire(ReplicatedStorage.Gui.MemoryMatch, "RegisterTileSelected")
+	api.LocalCollect = safeRequire(ReplicatedStorage.Collectors.LocalCollect, "Run")
+	api.LocalPlanters = safeRequire(ReplicatedStorage.LocalPlanters, "CheckForNearbyHarvestablePlanters")
+	api.MemoryMatchManager = safeRequire(ReplicatedStorage.MemoryMatchManager, "SetActiveGame")
+	api.ClientMonsterTools = safeRequire(ReplicatedStorage.ClientMonsterTools, "GetSpawnerCooldown")
+	api.RoboBearGuiClose = safeRequire(ReplicatedStorage.Gui.RoboBearGui, "ClosePromptBox")
+	api.GateManager = safeRequire(ReplicatedStorage.GateManager, "UpdateGateColors")
+	api.Blender = safeRequire(ReplicatedStorage.BlenderRecipes, "Get")
+	api.EggTypes = safeRequire(ReplicatedStorage.EggTypes, "GetTypes")
+	api.StatReqs = safeRequire(ReplicatedStorage.StatReqs, "Check")
+	api.BeeMutations = safeRequire(ReplicatedStorage.BeeStats.BeeMutations)
+	api.Amulets = safeRequire(game.ReplicatedStorage.Amulets, "ModsDescription")
+	api.StatModifiers = safeRequire(ReplicatedStorage.StatModifiers, "Description")
+	api.BeeStatMods = safeRequire(ReplicatedStorage.BeeStats.BeeStatMods, "GetType")
+	api.WaxTypes = safeRequire(game.ReplicatedStorage.WaxTypes, "ByID")
+
+	local activatables = ReplicatedStorage.Activatables
+	api.Hives = safeRequire(activatables.Hives, "ButtonEffect")
+	api.NPCs = safeRequire(activatables.NPCs, "ButtonEffect")
+	api.Shops = safeRequire(activatables.Shops, "ButtonEffect")
+	api.Toys = safeRequire(activatables.Toys, "ButtonEffect")
+	api.ToysText = safeRequire(activatables.Toys, "ButtonText")
+
+	if api.LocalCollect then
+		pcall(function()
+			secureCall(api.LocalCollect)
+		end)
+	end
+
+	pcall(function()
+		if api.LocalPlanters and type(debug.getupvalue(api.LocalPlanters, 1)) ~= "table" then
+			warn("[Atlas] debug.getupvalue returned unexpected value on LocalPlanters")
+		end
+	end)
+
+	pcall(function()
+		local conns = getconnections(gameGui.Dialog.ButtonOverlay.MouseButton1Click)
+		if not conns or not conns[1] or not conns[1].Function then
+			warn("[Atlas] getconnections returned no connection on Dialog")
+		end
+	end)
+
+	if type(setthreadidentity) == "function" then
+		setthreadidentity(prevIdentity)
 	end
 end
 gameApi.Cache = function(api, ...)
@@ -1367,7 +1494,9 @@ if _G.atlas then
 	end
 end
 local ScreenGui = Instance.new("ScreenGui")
-warn("[Atlas] boot | executor=" .. tostring(identifyexecutor and identifyexecutor()) .. " | guild=" .. tostring(type(getgenv)))
+if ATLAS_LIMITED then
+	warn("[Atlas] boot | executor=" .. tostring(atlasExecutorName) .. " | compat=on")
+end
 local mobileToggleButton, controls, currentField, position, currentFieldName, vector, availableFields, setField, getFieldAt, isPathClear
 local randomFieldPosition, updateAvailableFields, tracked, watchBalloons, watchClouds, watchDupedTokens, watchStations, watchAlerts, watchFlames, watchFlowers
 local watchBlooms, watchNpcBees, watchRbcMobs, findMeteor
