@@ -31,6 +31,11 @@ _G.loading = true
 _G.loadingAt = os.clock()
 
 if ATLAS_LIMITED then
+	pcall(function()
+		if type(setthreadidentity) == "function" then
+			setthreadidentity(8)
+		end
+	end)
 	local atlasEnv = (type(getgenv) == "function" and getgenv()) or _G
 	local function atlasShim(name, fallback)
 		if type(atlasEnv[name]) ~= "function" then
@@ -45,6 +50,16 @@ if ATLAS_LIMITED then
 	atlasShim("fireclickdetector", function() end)
 	atlasShim("restorefunction", function() end)
 	atlasShim("hookfunction", function(original) return original end)
+	-- file API: configs simply will not persist if the executor lacks it,
+	-- but the script must not die right after the Home tab is built
+	atlasShim("isfolder", function() return false end)
+	atlasShim("makefolder", function() end)
+	atlasShim("writefile", function() end)
+	atlasShim("readfile", function() return "" end)
+	atlasShim("isfile", function() return false end)
+	atlasShim("appendfile", function() end)
+	atlasShim("delfile", function() end)
+	atlasShim("listfiles", function() return {} end)
 	if type(atlasEnv.gethui) ~= "function" then
 		atlasEnv.gethui = function() return nil end
 	end
@@ -1108,29 +1123,39 @@ end
 local threads = { list = {} }
 local connections = { list = {} }
 gameApi.SetupSecureCall = function()
-	if not secureCall then
-		secureCall = newcclosure(function(n, ...)
-			local Z, p
-			local q
-			threadCount += 1
-			threads.list[threadCount] = task.spawn(function(...)
-				-- identity 5 cannot require RobloxScript modules -> game modules spam errors
-				-- 8 keeps require() working; change to 5 only if you need to mimic a LocalScript
-				setthreadidentity(ATLAS_SECURE_IDENTITY)
-				Z, p = pcall(function(...)
-					return table.pack(n(...))
-				end, ...)
-				q = true
-			end, ...)
-			while not q do
-				task.wait()
-			end
-			if not Z then
-				error(p)
-			end
-			return table.unpack(p)
-		end)
+	if secureCall then
+		return
 	end
+	if ATLAS_LIMITED then
+		-- Xeno/Solara: do not spawn a thread and do not touch identity.
+		-- Spawned threads inherit an identity that cannot require RobloxScript
+		-- modules, which makes every game module (Quests, StatReqs, Activatables,
+		-- RainbowPartAnimator, ...) spam "Cannot require a RobloxScript module".
+		-- Calling directly keeps the executor's own identity (>= 8).
+		secureCall = function(n, ...)
+			return n(...)
+		end
+		return
+	end
+	secureCall = newcclosure(function(n, ...)
+		local Z, p
+		local q
+		threadCount += 1
+		threads.list[threadCount] = task.spawn(function(...)
+			setthreadidentity(ATLAS_SECURE_IDENTITY)
+			Z, p = pcall(function(...)
+				return table.pack(n(...))
+			end, ...)
+			q = true
+		end, ...)
+		while not q do
+			task.wait()
+		end
+		if not Z then
+			error(p)
+		end
+		return table.unpack(p)
+	end)
 end
 gameApi.Setup = function(api)
 	if not ATLAS_LIMITED then
@@ -1173,17 +1198,33 @@ gameApi.Setup = function(api)
 		return
 	end
 
-	local prevIdentity = type(getthreadidentity) == "function" and getthreadidentity() or 8
-	if type(setthreadidentity) == "function" and prevIdentity < ATLAS_SECURE_IDENTITY then
-		setthreadidentity(ATLAS_SECURE_IDENTITY)
+	-- Xeno / Solara: every path is resolved and required inside pcall,
+	-- so a single missing or renamed module cannot abort the whole setup.
+	local function resolvePath(pathString)
+		local node = ReplicatedStorage
+		for part in string.gmatch(pathString, "[^%.]+") do
+			local ok, child = pcall(function()
+				return node[part]
+			end)
+			if not ok or child == nil then
+				return nil
+			end
+			node = child
+		end
+		return node
 	end
 
-	local function safeRequire(path, field)
+	local function safeRequire(pathString, field)
+		local node = resolvePath(pathString)
+		if node == nil then
+			warn("[Atlas] module missing: " .. tostring(pathString))
+			return nil
+		end
 		local ok, res = pcall(function()
-			return require(path)
+			return require(node)
 		end)
 		if not ok then
-			warn("[Atlas] require failed: " .. tostring(path) .. " -> " .. tostring(res))
+			warn("[Atlas] require failed: " .. tostring(pathString) .. " -> " .. tostring(res))
 			return nil
 		end
 		if field == nil then
@@ -1193,64 +1234,72 @@ gameApi.Setup = function(api)
 			return res[field]
 		end)
 		if not okField then
-			warn("[Atlas] field missing: " .. tostring(field) .. " on " .. tostring(path))
+			warn("[Atlas] field missing: " .. tostring(field) .. " on " .. tostring(pathString))
 			return nil
 		end
 		return value
 	end
 
-	api.Events = ReplicatedStorage.Events
-	api.Badges = safeRequire(ReplicatedStorage.Badges)
-	api.ItemPackages = safeRequire(ReplicatedStorage.ItemPackages)
-	api.ClientStatCache = safeRequire(ReplicatedStorage.ClientStatCache)
-	api.CyclingShopTools = safeRequire(ReplicatedStorage.ShopTools.CyclingShopTools)
-	api.StickerStack = safeRequire(ReplicatedStorage.StickerStack)
-	api.Quests = safeRequire(ReplicatedStorage.Quests)
-	api.BuffTile = safeRequire(ReplicatedStorage.Gui.TileDisplay.BuffTile, "GetBuffTile")
-	api.MemoryMatch = safeRequire(ReplicatedStorage.Gui.MemoryMatch, "RegisterTileSelected")
-	api.LocalCollect = safeRequire(ReplicatedStorage.Collectors.LocalCollect, "Run")
-	api.LocalPlanters = safeRequire(ReplicatedStorage.LocalPlanters, "CheckForNearbyHarvestablePlanters")
-	api.MemoryMatchManager = safeRequire(ReplicatedStorage.MemoryMatchManager, "SetActiveGame")
-	api.ClientMonsterTools = safeRequire(ReplicatedStorage.ClientMonsterTools, "GetSpawnerCooldown")
-	api.RoboBearGuiClose = safeRequire(ReplicatedStorage.Gui.RoboBearGui, "ClosePromptBox")
-	api.GateManager = safeRequire(ReplicatedStorage.GateManager, "UpdateGateColors")
-	api.Blender = safeRequire(ReplicatedStorage.BlenderRecipes, "Get")
-	api.EggTypes = safeRequire(ReplicatedStorage.EggTypes, "GetTypes")
-	api.StatReqs = safeRequire(ReplicatedStorage.StatReqs, "Check")
-	api.BeeMutations = safeRequire(ReplicatedStorage.BeeStats.BeeMutations)
-	api.Amulets = safeRequire(game.ReplicatedStorage.Amulets, "ModsDescription")
-	api.StatModifiers = safeRequire(ReplicatedStorage.StatModifiers, "Description")
-	api.BeeStatMods = safeRequire(ReplicatedStorage.BeeStats.BeeStatMods, "GetType")
-	api.WaxTypes = safeRequire(game.ReplicatedStorage.WaxTypes, "ByID")
+	local okSetup, setupError = pcall(function()
+		api.Events = resolvePath("Events")
+		api.Badges = safeRequire("Badges")
+		api.ItemPackages = safeRequire("ItemPackages")
+		api.ClientStatCache = safeRequire("ClientStatCache")
+		api.CyclingShopTools = safeRequire("ShopTools.CyclingShopTools")
+		api.StickerStack = safeRequire("StickerStack")
+		api.Quests = safeRequire("Quests")
+		api.BuffTile = safeRequire("Gui.TileDisplay.BuffTile", "GetBuffTile")
+		api.MemoryMatch = safeRequire("Gui.MemoryMatch", "RegisterTileSelected")
+		api.LocalCollect = safeRequire("Collectors.LocalCollect", "Run")
+		api.LocalPlanters = safeRequire("LocalPlanters", "CheckForNearbyHarvestablePlanters")
+		api.MemoryMatchManager = safeRequire("MemoryMatchManager", "SetActiveGame")
+		api.ClientMonsterTools = safeRequire("ClientMonsterTools", "GetSpawnerCooldown")
+		api.RoboBearGuiClose = safeRequire("Gui.RoboBearGui", "ClosePromptBox")
+		api.GateManager = safeRequire("GateManager", "UpdateGateColors")
+		api.Blender = safeRequire("BlenderRecipes", "Get")
+		api.EggTypes = safeRequire("EggTypes", "GetTypes")
+		api.StatReqs = safeRequire("StatReqs", "Check")
+		api.BeeMutations = safeRequire("BeeStats.BeeMutations")
+		api.Amulets = safeRequire("Amulets", "ModsDescription")
+		api.StatModifiers = safeRequire("StatModifiers", "Description")
+		api.BeeStatMods = safeRequire("BeeStats.BeeStatMods", "GetType")
+		api.WaxTypes = safeRequire("WaxTypes", "ByID")
+		api.Hives = safeRequire("Activatables.Hives", "ButtonEffect")
+		api.NPCs = safeRequire("Activatables.NPCs", "ButtonEffect")
+		api.Shops = safeRequire("Activatables.Shops", "ButtonEffect")
+		api.Toys = safeRequire("Activatables.Toys", "ButtonEffect")
+		api.ToysText = safeRequire("Activatables.Toys", "ButtonText")
 
-	local activatables = ReplicatedStorage.Activatables
-	api.Hives = safeRequire(activatables.Hives, "ButtonEffect")
-	api.NPCs = safeRequire(activatables.NPCs, "ButtonEffect")
-	api.Shops = safeRequire(activatables.Shops, "ButtonEffect")
-	api.Toys = safeRequire(activatables.Toys, "ButtonEffect")
-	api.ToysText = safeRequire(activatables.Toys, "ButtonText")
-
-	if api.LocalCollect then
+		if api.LocalCollect then
+			pcall(function()
+				secureCall(api.LocalCollect)
+			end)
+		end
 		pcall(function()
-			secureCall(api.LocalCollect)
+			if api.LocalPlanters and type(debug.getupvalue(api.LocalPlanters, 1)) ~= "table" then
+				warn("[Atlas] debug.getupvalue returned unexpected value on LocalPlanters")
+			end
 		end)
+		pcall(function()
+			local conns = getconnections(gameGui.Dialog.ButtonOverlay.MouseButton1Click)
+			if not conns or not conns[1] or not conns[1].Function then
+				warn("[Atlas] getconnections returned no connection on Dialog")
+			end
+		end)
+	end)
+
+	if not okSetup then
+		warn("[Atlas] setup error: " .. tostring(setupError))
 	end
 
-	pcall(function()
-		if api.LocalPlanters and type(debug.getupvalue(api.LocalPlanters, 1)) ~= "table" then
-			warn("[Atlas] debug.getupvalue returned unexpected value on LocalPlanters")
+	local missing = 0
+	for _, key in ipairs({ "ClientStatCache", "Quests", "Events", "ItemPackages", "LocalPlanters" }) do
+		if api[key] == nil then
+			missing += 1
 		end
-	end)
-
-	pcall(function()
-		local conns = getconnections(gameGui.Dialog.ButtonOverlay.MouseButton1Click)
-		if not conns or not conns[1] or not conns[1].Function then
-			warn("[Atlas] getconnections returned no connection on Dialog")
-		end
-	end)
-
-	if type(setthreadidentity) == "function" then
-		setthreadidentity(prevIdentity)
+	end
+	if missing > 0 then
+		warn("[Atlas] " .. tostring(missing) .. " core module(s) unavailable, some features will be disabled")
 	end
 end
 gameApi.Cache = function(api, ...)
@@ -4948,47 +4997,84 @@ do
 		end
 	end
 	connections:Add("planters", workspace.Planters.ChildAdded:Connect(function(child)
-		if child.Name == "PlanterBulb" then
-			if child:FindFirstChild("Gui Attach") then
-				local textLabel = child["Gui Attach"]["Planter Gui"].Bar.TextLabel
-				table.insert(tracked.planters, {
-					field = getFieldAt(child.Position).Name,
-					position = child.Position,
-					name = string.match(textLabel.Text, "(.+)%s%("),
-					puffshrooms = child.PuffshroomSpores,
-					percent = child.GrowthPercent,
-					textLabel = textLabel,
-				})
-			end
+		if child.Name ~= "PlanterBulb" then
+			return
 		end
+		pcall(function()
+			local attach = child:FindFirstChild("Gui Attach")
+			if not attach then
+				return
+			end
+			local gui = attach:FindFirstChild("Planter Gui")
+			if not gui then
+				return
+			end
+			local bar = gui:FindFirstChild("Bar")
+			local textLabel = bar and bar:FindFirstChild("TextLabel")
+			if not textLabel then
+				return
+			end
+			local growth = child:FindFirstChild("GrowthPercent")
+			if not growth then
+				warn("[Atlas] planter without GrowthPercent, tracking skipped")
+				return
+			end
+			local field = getFieldAt(child.Position)
+			table.insert(tracked.planters, {
+				field = field and field.Name or "",
+				position = child.Position,
+				name = string.match(textLabel.Text, "(.+)%s%(") or textLabel.Text,
+				puffshrooms = child:FindFirstChild("PuffshroomSpores") or { Enabled = false },
+				percent = growth,
+				textLabel = textLabel,
+			})
+		end)
 	end))
 	connections:Add("planters2", workspace.Planters.ChildRemoved:Connect(function(child)
-		if child.Name == "PlanterBulb" then
-			if child:FindFirstChild("Gui Attach") then
-				local planterName = string.match(child["Gui Attach"]["Planter Gui"].Bar.TextLabel.Text, "(.+)%s%(")
-				for i, planter in ipairs(tracked.planters) do
-					if planter.name == planterName then
-						table.remove(tracked.planters, i)
-						break
-					end
+		if child.Name ~= "PlanterBulb" then
+			return
+		end
+		pcall(function()
+			local attach = child:FindFirstChild("Gui Attach")
+			local gui = attach and attach:FindFirstChild("Planter Gui")
+			local bar = gui and gui:FindFirstChild("Bar")
+			local textLabel = bar and bar:FindFirstChild("TextLabel")
+			if not textLabel then
+				return
+			end
+			local planterName = string.match(textLabel.Text, "(.+)%s%(") or textLabel.Text
+			for i, planter in ipairs(tracked.planters) do
+				if planter.name == planterName then
+					table.remove(tracked.planters, i)
+					break
 				end
 			end
-		end
+		end)
 	end))
 	for _, child in ipairs(workspace.Planters:GetChildren()) do
-		if not (child.Name ~= "PlanterBulb" or not child:FindFirstChild("Gui Attach")) then
-			local textLabel = child["Gui Attach"]["Planter Gui"].Bar.TextLabel
-			local field = getFieldAt(child.Position)
-			if field then
+		if child.Name == "PlanterBulb" then
+			pcall(function()
+				local attach = child:FindFirstChild("Gui Attach")
+				local gui = attach and attach:FindFirstChild("Planter Gui")
+				local bar = gui and gui:FindFirstChild("Bar")
+				local textLabel = bar and bar:FindFirstChild("TextLabel")
+				if not textLabel then
+					return
+				end
+				local growth = child:FindFirstChild("GrowthPercent")
+				if not growth then
+					return
+				end
+				local field = getFieldAt(child.Position)
 				table.insert(tracked.planters, {
-					field = field.Name,
+					field = field and field.Name or "",
 					position = child.Position,
-					name = string.match(textLabel.Text, "(.+)%s%("),
-					puffshrooms = child.PuffshroomSpores,
-					percent = child.GrowthPercent,
+					name = string.match(textLabel.Text, "(.+)%s%(") or textLabel.Text,
+					puffshrooms = child:FindFirstChild("PuffshroomSpores") or { Enabled = false },
+					percent = growth,
 					textLabel = textLabel,
 				})
-			end
+			end)
 		end
 	end
 	do
@@ -17874,17 +17960,35 @@ Content-Disposition: form-data; name="file[0]"; filename="image.png"
 		local function harvestPlanter(planterData)
 			reportStatus(3)
 			logger.log("Harvesting", planterData.name, "in", planterData.field)
-			setField(planterData.field)
-			goToField()
+			if planterData.field and planterData.field ~= "" then
+				pcall(function()
+					setField(planterData.field)
+					goToField()
+				end)
+			else
+				logger.warn("Unknown field for", planterData.name, "- moving straight to position")
+			end
 			walkTo(planterData.position, true, 5)
-			local planterTypes, actorID = secureCall(require(ReplicatedStorage.PlanterTypes).GetTypes)
-			for _, localPlanter in pairs(debug.getupvalue(gameApi.LocalPlanters, 1)) do
-				if localPlanter.IsMine then
-					if planterTypes[localPlanter.Type].DisplayName == planterData.name then
-						actorID = localPlanter.ActorID
-						break
+			local planterTypes, actorID
+			pcall(function()
+				planterTypes, actorID = secureCall(require(ReplicatedStorage.PlanterTypes).GetTypes)
+			end)
+			local localPlanters
+			pcall(function()
+				localPlanters = debug.getupvalue(gameApi.LocalPlanters, 1)
+			end)
+			if type(localPlanters) == "table" and type(planterTypes) == "table" then
+				for _, localPlanter in pairs(localPlanters) do
+					if localPlanter.IsMine then
+						local typeInfo = planterTypes[localPlanter.Type]
+						if typeInfo and typeInfo.DisplayName == planterData.name then
+							actorID = localPlanter.ActorID
+							break
+						end
 					end
 				end
+			else
+				warn("[Atlas] planter lookup unavailable (upvalue/planterTypes), using fallback actor")
 			end
 			if not actorID then
 				logger.warn("Failed to find planter ID for", planterData.name)
@@ -17893,7 +17997,12 @@ Content-Disposition: form-data; name="file[0]"; filename="image.png"
 			for i = 1, 2 do
 				if findPlanter(planterData.name) then
 					input:pressActivateButton()
-					gameApi:Event("PlanterModelCollect", actorID)
+					local okCollect, collectError = pcall(function()
+						gameApi:Event("PlanterModelCollect", actorID)
+					end)
+					if not okCollect then
+						warn("[Atlas] PlanterModelCollect failed: " .. tostring(collectError))
+					end
 					local now = os.clock()
 					while not (not findPlanter(planterData.name) or not (os.clock() - now < 2)) do
 						RunService.Heartbeat:Wait()
@@ -17920,7 +18029,14 @@ Content-Disposition: form-data; name="file[0]"; filename="image.png"
 				setField(fieldName)
 				goToField()
 				walkTo(position, true)
-				if inventory:Use(planterName) then
+				local usedPlanter
+				local okUse = pcall(function()
+					usedPlanter = inventory:Use(planterName)
+				end)
+				if not okUse then
+					logger.warn("Failed to use planter", planterName)
+				end
+				if okUse and usedPlanter then
 					local now = os.clock()
 					while not findPlanter(planterName) and os.clock() - now < 2 do
 						RunService.Heartbeat:Wait()
