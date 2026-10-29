@@ -36,26 +36,6 @@ if ATLAS_LIMITED then
 			setthreadidentity(8)
 		end
 	end)
-	-- CRITICAL: Block task.spawn for cosmetic game modules BEFORE any other code runs.
-	-- On Xeno/Solara, task.spawn creates threads with identity <8, and setthreadidentity
-	-- inside the spawned thread does not work. Game modules spawn their own loops, and
-	-- those loops then fail on every require() with "Cannot require a RobloxScript module".
-	-- The only working solution: prevent those spawns entirely.
-	local taskSpawn = task.spawn
-	task.spawn = function(callback, ...)
-		local info = debug.info(callback, "s")
-		-- Only block if the source is a game module path (ReplicatedStorage/CoreGui),
-		-- not if it's Atlas code (no path) or a user script.
-		if info and type(info) == "string" 
-			and (string.find(info, "ReplicatedStorage", 1, true) or string.find(info, "CoreGui", 1, true))
-			and (string.find(info, "RainbowPart", 1, true)
-				or string.find(info, "Activatables", 1, true)
-				or string.find(info, "Fireflies", 1, true)) then
-			warn("[Atlas] blocked cosmetic task.spawn from: " .. tostring(info))
-			return nil
-		end
-		return taskSpawn(callback, ...)
-	end
 	local atlasEnv = (type(getgenv) == "function" and getgenv()) or _G
 	local function atlasShim(name, fallback)
 		if type(atlasEnv[name]) ~= "function" then
@@ -1208,12 +1188,15 @@ gameApi.Setup = function(api)
 		api.StatModifiers = require(ReplicatedStorage.StatModifiers).Description
 		api.BeeStatMods = require(ReplicatedStorage.BeeStats.BeeStatMods).GetType
 		api.WaxTypes = require(game.ReplicatedStorage.WaxTypes).ByID
-		local activatables = ReplicatedStorage.Activatables
-		api.Hives = require(activatables.Hives).ButtonEffect
-		api.NPCs = require(activatables.NPCs).ButtonEffect
-		api.Shops = require(activatables.Shops).ButtonEffect
-		api.Toys = require(activatables.Toys).ButtonEffect
-		api.ToysText = require(activatables.Toys).ButtonText
+		-- Skip Activatables modules: on Xeno/Solara they spawn cosmetic loops in low-identity threads,
+		-- causing "Cannot require a RobloxScript module" spam every frame. Atlas checks for their
+		-- presence before calling, so skipping them is safe.
+		-- local activatables = ReplicatedStorage.Activatables
+		-- api.Hives = require(activatables.Hives).ButtonEffect
+		-- api.NPCs = require(activatables.NPCs).ButtonEffect
+		-- api.Shops = require(activatables.Shops).ButtonEffect
+		-- api.Toys = require(activatables.Toys).ButtonEffect
+		-- api.ToysText = require(activatables.Toys).ButtonText
 		secureCall(api.LocalCollect)
 		if type(debug.getupvalue(api.LocalPlanters, 1)) ~= "table" then
 			error("debug.getupvalue failed")
@@ -1290,11 +1273,16 @@ gameApi.Setup = function(api)
 		api.StatModifiers = safeRequire("StatModifiers", "Description")
 		api.BeeStatMods = safeRequire("BeeStats.BeeStatMods", "GetType")
 		api.WaxTypes = safeRequire("WaxTypes", "ByID")
-		api.Hives = safeRequire("Activatables.Hives", "ButtonEffect")
-		api.NPCs = safeRequire("Activatables.NPCs", "ButtonEffect")
-		api.Shops = safeRequire("Activatables.Shops", "ButtonEffect")
-		api.Toys = safeRequire("Activatables.Toys", "ButtonEffect")
-		api.ToysText = safeRequire("Activatables.Toys", "ButtonText")
+		-- Skip Activatables, Hives, NPCs, Shops, Toys on Xeno/Solara: they spawn low-identity loops
+		-- that spam "Cannot require a RobloxScript module" every frame.
+		-- Atlas checks for api.Hives/NPCs/etc before calling, so skipping them is safe.
+		if not ATLAS_LIMITED then
+			api.Hives = safeRequire("Activatables.Hives", "ButtonEffect")
+			api.NPCs = safeRequire("Activatables.NPCs", "ButtonEffect")
+			api.Shops = safeRequire("Activatables.Shops", "ButtonEffect")
+			api.Toys = safeRequire("Activatables.Toys", "ButtonEffect")
+			api.ToysText = safeRequire("Activatables.Toys", "ButtonText")
+		end
 
 		if api.LocalCollect then
 			pcall(function()
@@ -27982,34 +27970,8 @@ if isfile("atlasplanters-" .. localPlayer.Name .. ".json") then
 	end
 end
 	local setupAttempts = 0
-	-- Xeno/Solara: block game cosmetic loops BEFORE Setup runs, so they never register.
+	-- Xeno/Solara: skip game cosmetic modules entirely in Setup, call Setup once from main thread
 	if ATLAS_LIMITED then
-		local RunService = game:GetService("RunService")
-		-- Block BindToRenderStep registration for cosmetic modules
-		local rsBindToRenderStep = RunService.BindToRenderStep
-		RunService.BindToRenderStep = function(self, name, ...)
-			if string.find(name or "", "RainbowPart", 1, true)
-				or string.find(name or "", "Activatables", 1, true)
-				or string.find(name or "", "Fireflies", 1, true) then
-				warn("[Atlas] blocked cosmetic loop: " .. tostring(name))
-				return
-			end
-			return rsBindToRenderStep(self, name, ...)
-		end
-		-- Block Heartbeat:Connect for the same modules (fallback registration path)
-		local rsHeartbeat = RunService.Heartbeat
-		local hbConnect = rsHeartbeat.Connect
-		rsHeartbeat.Connect = function(self, callback, ...)
-			local info = debug.info(callback, "s")
-			if info and (string.find(info, "RainbowPart", 1, true)
-				or string.find(info, "Activatables", 1, true)
-				or string.find(info, "Fireflies", 1, true)) then
-				warn("[Atlas] blocked cosmetic Heartbeat: " .. tostring(info))
-				return { Disconnect = function() end }
-			end
-			return hbConnect(self, callback, ...)
-		end
-		-- Force identity 8, then call Setup once from main thread
 		if type(setthreadidentity) == "function" then
 			pcall(setthreadidentity, 8)
 		end
