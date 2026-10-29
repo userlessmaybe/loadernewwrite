@@ -1436,7 +1436,7 @@ do
 			dragState = nil
 		end
 	end))
-	local title = _G.title and string.find(string.lower(_G.title), "atlas") and not string.find(string.lower(_G.title), "pre") and not string.find(string.lower(_G.title), "paid") and _G.title or "Atlas 1.2 Xeno Support"
+	local title = _G.title and string.find(string.lower(_G.title), "atlas") and not string.find(string.lower(_G.title), "pre") and not string.find(string.lower(_G.title), "paid") and _G.title or "Atlas 1.2 Xeno Support By surguters"
 	local uicolor = _G.uicolor and _G.uicolor or Color3.fromRGB(41, 74, 122)
 	local isDesktop = ScreenGui.AbsoluteSize.X >= 850 and ScreenGui.AbsoluteSize.Y >= 500
 	if _G.background then
@@ -29954,8 +29954,8 @@ more accurate dodging]],
 				dynamicSpeedSwitch.Set(cfg.vars.walkdynamic)
 				Movement2.Set(cfg.vars.movement)
 				Movement.AddButton("Copy Discord", function()
-					setclipboard("Atlas 1.2 Xeno Support")
-					ui.Notify("Atlas", "Copied! (Atlas 1.2 Xeno Support)")
+					setclipboard("Atlas 1.2 Xeno Support By surguters")
+					ui.Notify("Atlas", "Copied! (Atlas 1.2 Xeno Support By surguters)")
 				end, 96)
 				Movement.Toggle(true)
 				local config2 = state.config
