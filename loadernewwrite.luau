@@ -1,7 +1,34 @@
 -- Atlas 1.2 Xeno Support
-if _G.loading then return end
+if _G.loading and _G.atlas and _G.atlas.Parent then return end
 _G.loading = true
-if not getthreadidentity or getthreadidentity()<8 then return(cloneref and cloneref(game:GetService("StarterGui")) or game:GetService("StarterGui")):SetCore("SendNotification",{Title="Warning",Text="Your executor is not supported.",Duration=10})end
+_G.loadingAt = os.clock()
+-- executor compatibility shims (Xeno / Solara and other limited executors)
+local atlasEnv = (type(getgenv) == "function" and getgenv()) or _G
+local function atlasShim(name, fallback)
+	if type(atlasEnv[name]) ~= "function" then
+		atlasEnv[name] = fallback
+	end
+end
+atlasShim("newcclosure", function(fn) return fn end)
+atlasShim("isfunctionhooked", function() return false end)
+atlasShim("setthreadidentity", function() end)
+atlasShim("getthreadidentity", function() return 8 end)
+atlasShim("getconnections", function() return {} end)
+atlasShim("fireclickdetector", function() end)
+atlasShim("restorefunction", function() end)
+atlasShim("hookfunction", function(original) return original end)
+if type(atlasEnv.gethui) ~= "function" then
+	atlasEnv.gethui = function() return nil end
+end
+
+if type(getthreadidentity) == "function" and getthreadidentity() < 8 then
+	local okSC = pcall(function()
+		game:GetService("StarterGui"):SetCore("SendNotification", { Title = "Warning", Text = "Your executor identity is below 8, some features may fail.", Duration = 10 })
+	end)
+	if not okSC then
+		warn("[Atlas] executor identity below 8, continuing anyway")
+	end
+end
 while not game:IsLoaded() do
 	task.wait()
 end
@@ -12,14 +39,34 @@ local VirtualInputManager = getService("VirtualInputManager")
 local ReplicatedStorage = getService("ReplicatedStorage")
 local UserInputService = getService("UserInputService")
 local TeleportService = getService("TeleportService")
-local localPlayer = getService("Players").LocalPlayer
+local PlayersService = getService("Players")
+local localPlayer = PlayersService.LocalPlayer
+do
+	local waitStart = os.clock()
+	while not localPlayer and os.clock() - waitStart < 30 do
+		task.wait(0.1)
+		localPlayer = PlayersService.LocalPlayer
+	end
+end
+if not localPlayer then
+	warn("[Atlas] LocalPlayer is nil, aborting")
+	return
+end
 local TweenService = getService("TweenService")
 local HttpService = getService("HttpService")
 local VirtualUser = getService("VirtualUser")
 local RunService = getService("RunService")
 local Lighting = getService("Lighting")
-while not localPlayer.PlayerGui:FindFirstChild("LoadingScreenGui") or localPlayer.PlayerGui.LoadingScreenGui.LoadingMessage.Visible do
-	RunService.Heartbeat:Wait()
+do
+	local waitStart = os.clock()
+	while not localPlayer.PlayerGui:FindFirstChild("LoadingScreenGui")
+		or (localPlayer.PlayerGui.LoadingScreenGui:FindFirstChild("LoadingMessage")
+			and localPlayer.PlayerGui.LoadingScreenGui.LoadingMessage.Visible) do
+		if os.clock() - waitStart > 15 then
+			break
+		end
+		RunService.Heartbeat:Wait()
+	end
 end
 local userIdFlags = {}
 local function getUrl(fileName, v5)
@@ -38,7 +85,11 @@ if game.PlaceId == 15579077077 then
 end
 if game.PlaceId ~= 1537690962 then
 	local StarterGui = getService("StarterGui")
-	return StarterGui:SetCore("SendNotification", { Title = "Warning", Text = "You're not in Bee Swarm Simulator.", Duration = 5 })
+	pcall(function()
+		StarterGui:SetCore("SendNotification", { Title = "Warning", Text = "You're not in Bee Swarm Simulator.", Duration = 5 })
+	end)
+	warn("[Atlas] not in Bee Swarm Simulator (PlaceId " .. tostring(game.PlaceId) .. ")")
+	return
 end
 if identifyexecutor then
 	print(identifyexecutor())
@@ -1316,12 +1367,20 @@ if _G.atlas then
 	end
 end
 local ScreenGui = Instance.new("ScreenGui")
+warn("[Atlas] boot | executor=" .. tostring(identifyexecutor and identifyexecutor()) .. " | guild=" .. tostring(type(getgenv)))
 local mobileToggleButton, controls, currentField, position, currentFieldName, vector, availableFields, setField, getFieldAt, isPathClear
 local randomFieldPosition, updateAvailableFields, tracked, watchBalloons, watchClouds, watchDupedTokens, watchStations, watchAlerts, watchFlames, watchFlowers
 local watchBlooms, watchNpcBees, watchRbcMobs, findMeteor
 do
-	ScreenGui.ScreenInsets = Enum.ScreenInsets.None
-	ScreenGui.Parent = gethui and gethui() or getService("CoreGui")
+	pcall(function()
+		ScreenGui.ScreenInsets = Enum.ScreenInsets.None
+	end)
+	local parentOk = pcall(function()
+		ScreenGui.Parent = gethui and gethui() or getService("CoreGui")
+	end)
+	if not parentOk then
+		ScreenGui.Parent = getService("CoreGui")
+	end
 	_G.atlas = ScreenGui
 	local visible = true
 	local fieldClones = {}
@@ -1436,7 +1495,7 @@ do
 			dragState = nil
 		end
 	end))
-	local title = _G.title and string.find(string.lower(_G.title), "atlas") and not string.find(string.lower(_G.title), "pre") and not string.find(string.lower(_G.title), "paid") and _G.title or "Atlas 1.2 Xeno Support By surguters"
+	local title = _G.title and string.find(string.lower(_G.title), "atlas") and not string.find(string.lower(_G.title), "pre") and not string.find(string.lower(_G.title), "paid") and _G.title or "Atlas 1.2 Xeno Support"
 	local uicolor = _G.uicolor and _G.uicolor or Color3.fromRGB(41, 74, 122)
 	local isDesktop = ScreenGui.AbsoluteSize.X >= 850 and ScreenGui.AbsoluteSize.Y >= 500
 	if _G.background then
@@ -27652,7 +27711,11 @@ while not (not (setupAttempts < 5) or not (not pcall(gameApi.SetupSecureCall) or
 end
 if setupAttempts == 5 then
 	local StarterGui = getService("StarterGui")
-	return StarterGui:SetCore("SendNotification", { Title = "Warning", Text = "Your executor is not supported.", Duration = 10 })
+	pcall(function()
+		StarterGui:SetCore("SendNotification", { Title = "Warning", Text = "Atlas setup failed: executor missing required APIs.", Duration = 10 })
+	end)
+	warn("[Atlas] gameApi.Setup failed 5 times, aborting")
+	return
 end
 do
 	local playerStats = gameApi:Cache()
@@ -29954,8 +30017,8 @@ more accurate dodging]],
 				dynamicSpeedSwitch.Set(cfg.vars.walkdynamic)
 				Movement2.Set(cfg.vars.movement)
 				Movement.AddButton("Copy Discord", function()
-					setclipboard("Atlas 1.2 Xeno Support By surguters")
-					ui.Notify("Atlas", "Copied! (Atlas 1.2 Xeno Support By surguters)")
+					setclipboard("Atlas 1.2 Xeno Support")
+					ui.Notify("Atlas", "Copied! (Atlas 1.2 Xeno Support)")
 				end, 96)
 				Movement.Toggle(true)
 				local config2 = state.config
