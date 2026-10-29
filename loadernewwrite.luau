@@ -1497,15 +1497,7 @@ serializeTable = function(value, depth)
 	return table.concat(lines, "\n")
 end
 threads.Add = function(manager, threadId, callback)
-	local thread = task.spawn(function(...)
-		-- Xeno/Solara: task.spawn threads start below identity 8, and any game
-		-- module touched from them binds its own loops at that identity, which
-		-- then floods the console with "Cannot require a RobloxScript module".
-		if ATLAS_LIMITED and type(setthreadidentity) == "function" then
-			pcall(setthreadidentity, 8)
-		end
-		return callback(...)
-	end)
+	local thread = task.spawn(callback)
 	if thread then
 		manager.list[threadId] = thread
 	end
@@ -27969,19 +27961,45 @@ if isfile("atlasplanters-" .. localPlayer.Name .. ".json") then
 		planterInfo.timers = timers
 	end
 end
-local setupAttempts = 0
-while not (not (setupAttempts < 5) or not (not pcall(gameApi.SetupSecureCall) or not pcall(gameApi.Setup, gameApi))) do
-	task.wait(0.1)
-	setupAttempts += 1
-end
-if setupAttempts == 5 then
-	local StarterGui = getService("StarterGui")
-	pcall(function()
-		StarterGui:SetCore("SendNotification", { Title = "Warning", Text = "Atlas setup failed: executor missing required APIs.", Duration = 10 })
-	end)
-	warn("[Atlas] gameApi.Setup failed 5 times, aborting")
-	return
-end
+	local setupAttempts = 0
+	-- Xeno/Solara: force identity 8 now, call Setup once from the main thread so game
+	-- modules bind their own loops at identity 8, then block their loop registration.
+	if ATLAS_LIMITED then
+		if type(setthreadidentity) == "function" then
+			pcall(setthreadidentity, 8)
+		end
+		local okSecure = pcall(gameApi.SetupSecureCall)
+		if okSecure then
+			pcall(gameApi.Setup, gameApi)
+		end
+		-- Block game modules from registering RenderStepped loops that would spam the console.
+		-- These modules are purely cosmetic (color cycling, animations) and disabling them
+		-- has no functional impact on Atlas or the game.
+		local RunService = game:GetService("RunService")
+		local rsBindToRenderStep = RunService.BindToRenderStep
+		RunService.BindToRenderStep = function(self, name, ...)
+			if string.find(name or "", "RainbowPart", 1, true)
+				or string.find(name or "", "Activatables", 1, true)
+				or string.find(name or "", "Fireflies", 1, true) then
+				return
+			end
+			return rsBindToRenderStep(self, name, ...)
+		end
+	else
+		-- Other executors: keep the original retry loop
+		while not (not (setupAttempts < 5) or not (not pcall(gameApi.SetupSecureCall) or not pcall(gameApi.Setup, gameApi))) do
+			task.wait(0.1)
+			setupAttempts += 1
+		end
+		if setupAttempts == 5 then
+			local StarterGui = getService("StarterGui")
+			pcall(function()
+				StarterGui:SetCore("SendNotification", { Title = "Warning", Text = "Atlas setup failed: executor missing required APIs.", Duration = 10 })
+			end)
+			warn("[Atlas] gameApi.Setup failed 5 times, aborting")
+			return
+		end
+	end
 do
 	local playerStats = gameApi:Cache()
 	local userId = playerStats.UserId
