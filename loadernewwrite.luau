@@ -33,11 +33,9 @@ pcall(function()
 end)
 
 if ATLAS_LIMITED then
-	pcall(function()
-		if type(setthreadidentity) == "function" then
-			setthreadidentity(8)
-		end
-	end)
+	-- NOTE: never call setthreadidentity() on Xeno/Solara. There it changes the
+	-- identity of the whole client, so game LocalScripts lose identity 8 and every
+	-- require() spams "Cannot require a RobloxScript module from a non RobloxScript context".
 	local atlasEnv = (type(getgenv) == "function" and getgenv()) or _G
 	local function atlasSetGlobal(name, value)
 		-- getgenv() is read-only on Xeno/Solara: a bare assignment raises
@@ -1161,9 +1159,6 @@ gameApi.SetupSecureCall = function()
 				-- a module that failed to load leaves gameApi.<x> = nil; without
 				-- this guard the calling thread dies with "attempt to call a nil value"
 				return nil
-			end
-			if type(setthreadidentity) == "function" then
-				pcall(setthreadidentity, 8)
 			end
 			return n(...)
 		end
@@ -9573,7 +9568,9 @@ ump1,3545,3558,-1391:Jump1;3547=-3532,3558,-3534,3546,-3529;3548=3537,3536,3549,
 		end,
 		ClientCall = function(callName, callArg)
 			if callName == "CompleteQuest" or callName == "CompleteQuestFromPool" then
-				setthreadidentity(8)
+				if not ATLAS_LIMITED then
+					setthreadidentity(8)
+				end
 				local stats = discord.stats
 				stats["Quests Done"] = stats["Quests Done"] + 1
 				local questInfo = callName == "CompleteQuest" and secureCall(gameApi.Quests.Get, nil, callArg)
@@ -27998,9 +27995,6 @@ end
 	local setupAttempts = 0
 	-- Xeno/Solara: skip game cosmetic modules entirely in Setup, call Setup once from main thread
 	if ATLAS_LIMITED then
-		if type(setthreadidentity) == "function" then
-			pcall(setthreadidentity, 8)
-		end
 		local okSecure = pcall(gameApi.SetupSecureCall)
 		if okSecure then
 			pcall(gameApi.Setup, gameApi)
