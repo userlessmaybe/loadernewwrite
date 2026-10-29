@@ -28,7 +28,9 @@ else
 	end
 end
 _G.loading = true
-_G.loadingAt = os.clock()
+pcall(function()
+	_G.loadingAt = os.clock()
+end)
 
 if ATLAS_LIMITED then
 	pcall(function()
@@ -37,10 +39,34 @@ if ATLAS_LIMITED then
 		end
 	end)
 	local atlasEnv = (type(getgenv) == "function" and getgenv()) or _G
-	local function atlasShim(name, fallback)
-		if type(atlasEnv[name]) ~= "function" then
-			atlasEnv[name] = fallback
+	local function atlasSetGlobal(name, value)
+		-- getgenv() is read-only on Xeno/Solara: a bare assignment raises
+		-- "attempt to modify a readonly table" and kills the whole script.
+		-- Try every env we can reach, silently.
+		local targets = { atlasEnv, _G }
+		local okEnv = pcall(function()
+			if type(getfenv) == "function" then
+				local env = getfenv(0)
+				if type(env) == "table" then
+					table.insert(targets, env)
+				end
+			end
+		end)
+		for _, target in ipairs(targets) do
+			if type(target) == "table" then
+				local okWrite = pcall(function()
+					if type(target[name]) ~= "function" then
+						target[name] = value
+					end
+				end)
+				if not okWrite then
+					pcall(rawset, target, name, value)
+				end
+			end
 		end
+	end
+	local function atlasShim(name, fallback)
+		atlasSetGlobal(name, fallback)
 	end
 	atlasShim("newcclosure", function(fn) return fn end)
 	atlasShim("isfunctionhooked", function() return false end)
