@@ -36,6 +36,26 @@ if ATLAS_LIMITED then
 			setthreadidentity(8)
 		end
 	end)
+	-- CRITICAL: Block task.spawn for cosmetic game modules BEFORE any other code runs.
+	-- On Xeno/Solara, task.spawn creates threads with identity <8, and setthreadidentity
+	-- inside the spawned thread does not work. Game modules spawn their own loops, and
+	-- those loops then fail on every require() with "Cannot require a RobloxScript module".
+	-- The only working solution: prevent those spawns entirely.
+	local taskSpawn = task.spawn
+	task.spawn = function(callback, ...)
+		local info = debug.info(callback, "s")
+		-- Only block if the source is a game module path (ReplicatedStorage/CoreGui),
+		-- not if it's Atlas code (no path) or a user script.
+		if info and type(info) == "string" 
+			and (string.find(info, "ReplicatedStorage", 1, true) or string.find(info, "CoreGui", 1, true))
+			and (string.find(info, "RainbowPart", 1, true)
+				or string.find(info, "Activatables", 1, true)
+				or string.find(info, "Fireflies", 1, true)) then
+			warn("[Atlas] blocked cosmetic task.spawn from: " .. tostring(info))
+			return nil
+		end
+		return taskSpawn(callback, ...)
+	end
 	local atlasEnv = (type(getgenv) == "function" and getgenv()) or _G
 	local function atlasShim(name, fallback)
 		if type(atlasEnv[name]) ~= "function" then
@@ -27962,28 +27982,40 @@ if isfile("atlasplanters-" .. localPlayer.Name .. ".json") then
 	end
 end
 	local setupAttempts = 0
-	-- Xeno/Solara: force identity 8 now, call Setup once from the main thread so game
-	-- modules bind their own loops at identity 8, then block their loop registration.
+	-- Xeno/Solara: block game cosmetic loops BEFORE Setup runs, so they never register.
 	if ATLAS_LIMITED then
+		local RunService = game:GetService("RunService")
+		-- Block BindToRenderStep registration for cosmetic modules
+		local rsBindToRenderStep = RunService.BindToRenderStep
+		RunService.BindToRenderStep = function(self, name, ...)
+			if string.find(name or "", "RainbowPart", 1, true)
+				or string.find(name or "", "Activatables", 1, true)
+				or string.find(name or "", "Fireflies", 1, true) then
+				warn("[Atlas] blocked cosmetic loop: " .. tostring(name))
+				return
+			end
+			return rsBindToRenderStep(self, name, ...)
+		end
+		-- Block Heartbeat:Connect for the same modules (fallback registration path)
+		local rsHeartbeat = RunService.Heartbeat
+		local hbConnect = rsHeartbeat.Connect
+		rsHeartbeat.Connect = function(self, callback, ...)
+			local info = debug.info(callback, "s")
+			if info and (string.find(info, "RainbowPart", 1, true)
+				or string.find(info, "Activatables", 1, true)
+				or string.find(info, "Fireflies", 1, true)) then
+				warn("[Atlas] blocked cosmetic Heartbeat: " .. tostring(info))
+				return { Disconnect = function() end }
+			end
+			return hbConnect(self, callback, ...)
+		end
+		-- Force identity 8, then call Setup once from main thread
 		if type(setthreadidentity) == "function" then
 			pcall(setthreadidentity, 8)
 		end
 		local okSecure = pcall(gameApi.SetupSecureCall)
 		if okSecure then
 			pcall(gameApi.Setup, gameApi)
-		end
-		-- Block game modules from registering RenderStepped loops that would spam the console.
-		-- These modules are purely cosmetic (color cycling, animations) and disabling them
-		-- has no functional impact on Atlas or the game.
-		local RunService = game:GetService("RunService")
-		local rsBindToRenderStep = RunService.BindToRenderStep
-		RunService.BindToRenderStep = function(self, name, ...)
-			if string.find(name or "", "RainbowPart", 1, true)
-				or string.find(name or "", "Activatables", 1, true)
-				or string.find(name or "", "Fireflies", 1, true) then
-				return
-			end
-			return rsBindToRenderStep(self, name, ...)
 		end
 	else
 		-- Other executors: keep the original retry loop
