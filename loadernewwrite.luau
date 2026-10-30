@@ -18,6 +18,39 @@ local ATLAS_LIMITED = _G.atlasForceCompat == true
 	or string.find(atlasExecLower, "solara", 1, true) ~= nil
 local ATLAS_SECURE_IDENTITY = ATLAS_LIMITED and 8 or 5
 
+-- Reads the current thread identity without ever throwing.
+local function atlasIdentity()
+	local ok, value = pcall(function()
+		if type(getthreadidentity) == "function" then
+			return getthreadidentity()
+		end
+		return nil
+	end)
+	if ok and type(value) == "number" then
+		return value
+	end
+	return nil
+end
+
+-- Tries hard to get identity 8. Returns the final identity (number or nil).
+local function atlasRaiseIdentity()
+	local id = atlasIdentity()
+	if id and id >= 8 then
+		return id
+	end
+	if type(setthreadidentity) == "function" then
+		pcall(setthreadidentity, 8)
+		id = atlasIdentity()
+		if id and id >= 8 then
+			return id
+		end
+		pcall(setthreadidentity, 7)
+		pcall(setthreadidentity, 8)
+		id = atlasIdentity()
+	end
+	return id
+end
+
 if ATLAS_LIMITED then
 	if _G.loading and _G.atlas and _G.atlas.Parent then
 		return
@@ -1228,6 +1261,19 @@ gameApi.Setup = function(api)
 		return
 	end
 
+	-- Xeno / Solara: requiring game modules below identity 8 poisons them.
+	-- Their internal loops bind to the requesting thread's identity and then spam
+	-- "Cannot require a RobloxScript module" every frame, forever.
+	-- So: if identity is not 8, load nothing and keep the console clean.
+	do
+		local setupIdentity = atlasRaiseIdentity()
+		if not (setupIdentity and setupIdentity >= 8) then
+			warn("[Atlas] identity is " .. tostring(setupIdentity)
+				.. " (8 required) - game modules are NOT loaded, features relying on them are disabled")
+			return
+		end
+	end
+
 	-- Xeno / Solara: every path is resolved and required inside pcall,
 	-- so a single missing or renamed module cannot abort the whole setup.
 	local function resolvePath(pathString)
@@ -1526,7 +1572,15 @@ serializeTable = function(value, depth)
 	return table.concat(lines, "\n")
 end
 threads.Add = function(manager, threadId, callback)
-	local thread = task.spawn(callback)
+	local thread = task.spawn(function(...)
+		-- On Xeno/Solara every task.spawn thread starts below identity 8. Any game
+		-- module touched from such a thread binds its internal loops to that identity
+		-- and then spams "Cannot require a RobloxScript module" forever.
+		if ATLAS_LIMITED and type(setthreadidentity) == "function" then
+			pcall(setthreadidentity, 8)
+		end
+		return callback(...)
+	end)
 	if thread then
 		manager.list[threadId] = thread
 	end
@@ -1585,7 +1639,11 @@ if _G.atlas then
 end
 local ScreenGui = Instance.new("ScreenGui")
 if ATLAS_LIMITED then
-	warn("[Atlas] boot | executor=" .. tostring(atlasExecutorName) .. " | compat=on")
+	local bootIdentity = atlasRaiseIdentity()
+	warn("[Atlas] boot | executor=" .. tostring(atlasExecutorName)
+		.. " | identity=" .. tostring(bootIdentity)
+		.. " | build=3"
+		.. " | compat=on")
 end
 local mobileToggleButton, controls, currentField, position, currentFieldName, vector, availableFields, setField, getFieldAt, isPathClear
 local randomFieldPosition, updateAvailableFields, tracked, watchBalloons, watchClouds, watchDupedTokens, watchStations, watchAlerts, watchFlames, watchFlowers
