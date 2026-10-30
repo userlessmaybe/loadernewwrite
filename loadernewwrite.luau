@@ -1261,18 +1261,32 @@ gameApi.Setup = function(api)
 		return
 	end
 
-	-- Xeno / Solara: requiring game modules below identity 8 poisons them.
-	-- Their internal loops bind to the requesting thread's identity and then spam
-	-- "Cannot require a RobloxScript module" every frame, forever.
-	-- So: if identity is not 8, load nothing and keep the console clean.
-	do
-		local setupIdentity = atlasRaiseIdentity()
-		if not (setupIdentity and setupIdentity >= 8) then
-			warn("[Atlas] identity is " .. tostring(setupIdentity)
-				.. " (8 required) - game modules are NOT loaded, features relying on them are disabled")
-			return
+	-- Xeno / Solara: loading game modules is what triggers the endless
+	-- "Cannot require a RobloxScript module" spam. Load only the minimum the core
+	-- features need. _G.atlasModuleMode = "full" loads everything, "off" loads nothing.
+	local setupIdentity = atlasRaiseIdentity()
+	local moduleMode = _G.atlasModuleMode or "minimal"
+	local allowAll = moduleMode == "full"
+	local allowNone = moduleMode == "off"
+	local allow = {
+		Events = true,
+		ItemPackages = true,
+		ClientStatCache = true,
+		LocalPlanters = true,
+		LocalCollect = true,
+		Quests = true,
+		StatReqs = true,
+	}
+	local function may(key)
+		if allowNone then
+			return false
 		end
+		if allowAll then
+			return true
+		end
+		return allow[key] == true
 	end
+	warn("[Atlas] modules mode=" .. tostring(moduleMode) .. " identity=" .. tostring(setupIdentity))
 
 	-- Xeno / Solara: every path is resolved and required inside pcall,
 	-- so a single missing or renamed module cannot abort the whole setup.
@@ -1317,29 +1331,29 @@ gameApi.Setup = function(api)
 	end
 
 	local okSetup, setupError = pcall(function()
-		api.Events = resolvePath("Events")
-		api.Badges = safeRequire("Badges")
-		api.ItemPackages = safeRequire("ItemPackages")
-		api.ClientStatCache = safeRequire("ClientStatCache")
-		api.CyclingShopTools = safeRequire("ShopTools.CyclingShopTools")
-		api.StickerStack = safeRequire("StickerStack")
-		api.Quests = safeRequire("Quests")
-		api.BuffTile = safeRequire("Gui.TileDisplay.BuffTile", "GetBuffTile")
-		api.MemoryMatch = safeRequire("Gui.MemoryMatch", "RegisterTileSelected")
-		api.LocalCollect = safeRequire("Collectors.LocalCollect", "Run")
-		api.LocalPlanters = safeRequire("LocalPlanters", "CheckForNearbyHarvestablePlanters")
-		api.MemoryMatchManager = safeRequire("MemoryMatchManager", "SetActiveGame")
-		api.ClientMonsterTools = safeRequire("ClientMonsterTools", "GetSpawnerCooldown")
-		api.RoboBearGuiClose = safeRequire("Gui.RoboBearGui", "ClosePromptBox")
-		api.GateManager = safeRequire("GateManager", "UpdateGateColors")
-		api.Blender = safeRequire("BlenderRecipes", "Get")
-		api.EggTypes = safeRequire("EggTypes", "GetTypes")
-		api.StatReqs = safeRequire("StatReqs", "Check")
-		api.BeeMutations = safeRequire("BeeStats.BeeMutations")
-		api.Amulets = safeRequire("Amulets", "ModsDescription")
-		api.StatModifiers = safeRequire("StatModifiers", "Description")
-		api.BeeStatMods = safeRequire("BeeStats.BeeStatMods", "GetType")
-		api.WaxTypes = safeRequire("WaxTypes", "ByID")
+		api.Events = may("Events") and resolvePath("Events") or nil
+		api.Badges = may("Badges") and safeRequire("Badges") or nil
+		api.ItemPackages = may("ItemPackages") and safeRequire("ItemPackages") or nil
+		api.ClientStatCache = may("ClientStatCache") and safeRequire("ClientStatCache") or nil
+		api.CyclingShopTools = may("CyclingShopTools") and safeRequire("ShopTools.CyclingShopTools") or nil
+		api.StickerStack = may("StickerStack") and safeRequire("StickerStack") or nil
+		api.Quests = may("Quests") and safeRequire("Quests") or nil
+		api.BuffTile = may("BuffTile") and safeRequire("Gui.TileDisplay.BuffTile", "GetBuffTile") or nil
+		api.MemoryMatch = may("MemoryMatch") and safeRequire("Gui.MemoryMatch", "RegisterTileSelected") or nil
+		api.LocalCollect = may("LocalCollect") and safeRequire("Collectors.LocalCollect", "Run") or nil
+		api.LocalPlanters = may("LocalPlanters") and safeRequire("LocalPlanters", "CheckForNearbyHarvestablePlanters") or nil
+		api.MemoryMatchManager = may("MemoryMatchManager") and safeRequire("MemoryMatchManager", "SetActiveGame") or nil
+		api.ClientMonsterTools = may("ClientMonsterTools") and safeRequire("ClientMonsterTools", "GetSpawnerCooldown") or nil
+		api.RoboBearGuiClose = may("RoboBearGuiClose") and safeRequire("Gui.RoboBearGui", "ClosePromptBox") or nil
+		api.GateManager = may("GateManager") and safeRequire("GateManager", "UpdateGateColors") or nil
+		api.Blender = may("Blender") and safeRequire("BlenderRecipes", "Get") or nil
+		api.EggTypes = may("EggTypes") and safeRequire("EggTypes", "GetTypes") or nil
+		api.StatReqs = may("StatReqs") and safeRequire("StatReqs", "Check") or nil
+		api.BeeMutations = may("BeeMutations") and safeRequire("BeeStats.BeeMutations") or nil
+		api.Amulets = may("Amulets") and safeRequire("Amulets", "ModsDescription") or nil
+		api.StatModifiers = may("StatModifiers") and safeRequire("StatModifiers", "Description") or nil
+		api.BeeStatMods = may("BeeStatMods") and safeRequire("BeeStats.BeeStatMods", "GetType") or nil
+		api.WaxTypes = may("WaxTypes") and safeRequire("WaxTypes", "ByID") or nil
 		-- Skip Activatables, Hives, NPCs, Shops, Toys on Xeno/Solara: they spawn low-identity loops
 		-- that spam "Cannot require a RobloxScript module" every frame.
 		-- Atlas checks for api.Hives/NPCs/etc before calling, so skipping them is safe.
