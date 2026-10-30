@@ -1197,14 +1197,26 @@ gameApi.SetupSecureCall = function()
 	if secureCall then
 		return
 	end
+	local warnedNilCall = false
+	local function isCallable(fn, where)
+		if type(fn) == "function" then
+			return true
+		end
+		if not warnedNilCall then
+			warnedNilCall = true
+			pcall(function()
+				logger.warn("[Atlas] secureCall got nil instead of a function (" .. tostring(where)
+					.. ") - that game module is not loaded, related feature is disabled")
+			end)
+		end
+		return false
+	end
 	if ATLAS_LIMITED then
 		-- Xeno/Solara: call directly (a spawned thread inherits an identity that
 		-- cannot require RobloxScript modules), but force identity 8 first so the
 		-- call always runs in the same context the game modules expect.
 		secureCall = function(n, ...)
-			if type(n) ~= "function" then
-				-- a module that failed to load leaves gameApi.<x> = nil; without
-				-- this guard the calling thread dies with "attempt to call a nil value"
+			if not isCallable(n, "limited") then
 				return nil
 			end
 			return n(...)
@@ -1212,6 +1224,12 @@ gameApi.SetupSecureCall = function()
 		return
 	end
 	secureCall = newcclosure(function(n, ...)
+		-- A game module that failed to load leaves gameApi.<x> = nil. Without this
+		-- guard every call throws "attempt to call a nil value", the calling loop
+		-- dies and the warning repeats forever.
+		if not isCallable(n, "standard") then
+			return nil
+		end
 		local Z, p
 		local q
 		threadCount += 1
@@ -1400,17 +1418,46 @@ gameApi.Setup = function(api)
 		warn("[Atlas] unavailable modules (" .. tostring(#missingNames) .. "): " .. table.concat(missingNames, ", "))
 	end
 end
+local gameApiWarned = {}
+local function warnMissingGameApi(key)
+	if not gameApiWarned[key] then
+		gameApiWarned[key] = true
+		pcall(function()
+			logger.warn("[Atlas] gameApi." .. key .. " is unavailable - feature relying on it is disabled")
+		end)
+	end
+end
 gameApi.Cache = function(api, ...)
+	if not api.ClientStatCache or type(api.ClientStatCache.Get) ~= "function" then
+		warnMissingGameApi("ClientStatCache.Get")
+		return nil
+	end
 	return secureCall(api.ClientStatCache.Get, nil, ...)
 end
 gameApi.CacheUpdate = function(api, ...)
+	if not api.ClientStatCache or type(api.ClientStatCache.Update) ~= "function" then
+		warnMissingGameApi("ClientStatCache.Update")
+		return nil
+	end
 	return secureCall(api.ClientStatCache.Update, nil, ...)
 end
 gameApi.CacheSet = function(api, ...)
+	if not api.ClientStatCache or type(api.ClientStatCache.Set) ~= "function" then
+		warnMissingGameApi("ClientStatCache.Set")
+		return nil
+	end
 	return secureCall(api.ClientStatCache.Set, nil, ...)
 end
 gameApi.Event = function(api, eventName, ...)
+	if not api.Events then
+		warnMissingGameApi("Events")
+		return nil
+	end
 	local remote = api.Events[eventName]
+	if not remote then
+		warnMissingGameApi("Events." .. tostring(eventName))
+		return nil
+	end
 	if not remote:IsA("RemoteEvent") then
 		return remote:InvokeServer(...)
 	end
