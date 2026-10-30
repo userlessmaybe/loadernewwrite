@@ -19714,8 +19714,7 @@ Content-Disposition: form-data; name="file[0]"; filename="image.png"
 					table.insert(missingIngredients, requiredIngredient)
 				end
 			end
-			local v147, v148, v149
-			for _, missingIngredient in v147, v148, v149 do
+			for _, missingIngredient in ipairs(missingIngredients) do
 				if cfg.toys.progblender then
 					logger.log(logPrefix, "Crafting x" .. count, recipe)
 					logger.log(logPrefix, "Missing x" .. missingIngredient.Amount, missingIngredient.Type)
@@ -28112,11 +28111,13 @@ do
 	Home.AddHorizontalAlignment()
 	local sessionHoneyLabel = Home.AddLabel("Session Honey: 0?")
 	local honeyPerHourLabel = Home.AddLabel("Honey per Hour: 0?")
-	Home.AddButton("Reset Stats", function()
-		state.honeyatstart = localPlayer.CoreStats.Honey.Value
-		state.start = os.clock()
-		ui.Notify("Stats", "Session honey and per-hour reset")
-	end, 100)
+	pcall(function()
+		Home.AddButton("Reset Stats", function()
+			state.honeyatstart = localPlayer.CoreStats.Honey.Value
+			state.start = os.clock()
+			ui.Notify("Stats", "Session honey and per-hour reset")
+		end, 100)
+	end)
 	threads:Add("Stats", function()
 		while task.wait(1) do
 			local n = os.clock() - state.start
@@ -28529,15 +28530,18 @@ do
 						threads:Cancel("autodig")
 					end
 				end, "autofarm", "autodig")
-				local cloudFolder = farming.AddFolder("Cloud Vials")
-				local cloudInfoLabel = cloudFolder.AddLabel("Cloud Vials: ? | next: -")
-				cloudFolder.AddSwitch("Only In Current Field", nil, "cloudvials", "samefieldonly")
-				cloudFolder.AddSwitch("Slot 1 Enabled", nil, cfg.cloudvials.slot1, "enabled")
-				cloudFolder.AddDropdown("Slot 1 Field", availableFields, true, nil, cfg.cloudvials.slot1, "field", { Field = true, Width = 250 })
-				cloudFolder.AddSlider("Slot 1 Interval (min)", nil, 1, 15, cfg.cloudvials.slot1, "interval", { Left = true })
-				cloudFolder.AddSwitch("Slot 2 Enabled", nil, cfg.cloudvials.slot2, "enabled")
-				cloudFolder.AddDropdown("Slot 2 Field", availableFields, true, nil, cfg.cloudvials.slot2, "field", { Field = true, Width = 250 })
-				cloudFolder.AddSlider("Slot 2 Interval (min)", nil, 1, 15, cfg.cloudvials.slot2, "interval", { Left = true })
+				local cloudInfoLabel = nil
+				pcall(function()
+					local cloudFolder = farming.AddFolder("Cloud Vials")
+					cloudInfoLabel = cloudFolder.AddLabel("Cloud Vials: ? | next: -")
+					cloudFolder.AddSwitch("Only In Current Field", nil, "cloudvials", "samefieldonly")
+					cloudFolder.AddSwitch("Slot 1 Enabled", nil, cfg.cloudvials.slot1, "enabled")
+					cloudFolder.AddDropdown("Slot 1 Field", availableFields, true, nil, cfg.cloudvials.slot1, "field", { Field = true, Width = 250 })
+					cloudFolder.AddSlider("Slot 1 Interval (min)", nil, 1, 15, cfg.cloudvials.slot1, "interval", { Left = true })
+					cloudFolder.AddSwitch("Slot 2 Enabled", nil, cfg.cloudvials.slot2, "enabled")
+					cloudFolder.AddDropdown("Slot 2 Field", availableFields, true, nil, cfg.cloudvials.slot2, "field", { Field = true, Width = 250 })
+					cloudFolder.AddSlider("Slot 2 Interval (min)", nil, 1, 15, cfg.cloudvials.slot2, "interval", { Left = true })
+				end)
 				local function cloudVialSlotReady(slotIndex, slotCfg, now)
 					if not slotCfg or not slotCfg.enabled then
 						return false
