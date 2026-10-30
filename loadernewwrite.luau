@@ -138,6 +138,14 @@ while not game:IsLoaded() do
 	task.wait()
 end
 local function getService(serviceName)
+	-- Xeno/Solara: cloneref returns a wrapper userdata. Requiring game modules
+	-- through a wrapped ReplicatedStorage makes Roblox bind them to a bogus
+	-- security context, which is exactly what produces the endless
+	-- "Cannot require a RobloxScript module" spam from RainbowPartAnimator,
+	-- Activatables, Quests, StatReqs and friends.
+	if ATLAS_LIMITED then
+		return game:GetService(serviceName)
+	end
 	return cloneref and cloneref(game:GetService(serviceName)) or game:GetService(serviceName)
 end
 local VirtualInputManager = getService("VirtualInputManager")
@@ -293,7 +301,7 @@ local cfg = {
 		sharebeans = false,
 		craft = false,
 		toys = false,
-		blooms = false,
+		blooms = true,
 		tools = false,
 		oldtool = false,
 		planters = false,
@@ -316,7 +324,7 @@ local cfg = {
 		blackbear2 = false,
 		brownbear = false,
 		buckobee = false,
-		rileybee = false,
+		rileybee = true,
 		honeybee = false,
 		polarbear = false,
 	},
@@ -360,6 +368,12 @@ local cfg = {
 		snail4 = false,
 		star3 = false,
 		star4 = false,
+	},
+	cloudvials = {
+		enabled = false,
+		samefieldonly = false,
+		slot1 = { enabled = true, field = "Pine Tree Forest", interval = 2 },
+		slot2 = { enabled = false, field = "Dandelion Field", interval = 5 },
 	},
 	ant = { enabled = false, antpass = false },
 	beesmas = {
@@ -1264,19 +1278,10 @@ gameApi.Setup = function(api)
 	-- Xeno / Solara: loading game modules is what triggers the endless
 	-- "Cannot require a RobloxScript module" spam. Load only the minimum the core
 	-- features need. _G.atlasModuleMode = "full" loads everything, "off" loads nothing.
-	local setupIdentity = atlasRaiseIdentity()
-	local moduleMode = _G.atlasModuleMode or "safe"
+	local setupIdentity = atlasIdentity()
+	local moduleMode = _G.atlasModuleMode or "full"
 	local function may(key)
-		if moduleMode == "off" then
-			return false
-		end
-		if moduleMode == "full" then
-			return true
-		end
-		-- Quests / StatReqs drag ClientSessionManager and NPCs in. Their internal
-		-- loops start in the executor's script context and then spam
-		-- "Cannot require a RobloxScript module" on every frame.
-		return key ~= "Quests" and key ~= "StatReqs"
+		return moduleMode ~= "off"
 	end
 	warn("[Atlas] modules mode=" .. tostring(moduleMode) .. " identity=" .. tostring(setupIdentity))
 
@@ -1578,15 +1583,7 @@ serializeTable = function(value, depth)
 	return table.concat(lines, "\n")
 end
 threads.Add = function(manager, threadId, callback)
-	local thread = task.spawn(function(...)
-		-- On Xeno/Solara every task.spawn thread starts below identity 8. Any game
-		-- module touched from such a thread binds its internal loops to that identity
-		-- and then spams "Cannot require a RobloxScript module" forever.
-		if ATLAS_LIMITED and type(setthreadidentity) == "function" then
-			pcall(setthreadidentity, 8)
-		end
-		return callback(...)
-	end)
+	local thread = task.spawn(callback)
 	if thread then
 		manager.list[threadId] = thread
 	end
@@ -1645,7 +1642,7 @@ if _G.atlas then
 end
 local ScreenGui = Instance.new("ScreenGui")
 if ATLAS_LIMITED then
-	local bootIdentity = atlasRaiseIdentity()
+	local bootIdentity = atlasIdentity()
 	warn("[Atlas] boot | executor=" .. tostring(atlasExecutorName)
 		.. " | identity=" .. tostring(bootIdentity)
 		.. " | build=3"
@@ -24033,7 +24030,7 @@ do
 												v140.Type = "Share"
 											elseif not (v139.Type ~= "Craft Ingredients" or not autoquest.craft) then
 												v140.Type = "Craft"
-											elseif not (v139.Type ~= "Have Total" or not autoquest.blooms or type(v139.Tag) ~= "table" or v139.Tag[1] ~= "Petals" or not (not v139.Tag[4] or availableFields[v139.Tag[4]])) then
+											elseif v139.Type == "Have Total" and type(v139.Tag) == "table" and v139.Tag[1] == "Petals" and (autoquest.blooms == true or v139.Tag[4] ~= nil) and (v139.Tag[4] == nil or availableFields[v139.Tag[4]] == true) then
 												v140.Type = "Blooms"
 											elseif not (v139.Type ~= "Use Items" or not autoquest.rj or v139.Item ~= "RoyalJelly") then
 												v140.Type = "RJ"
@@ -27971,6 +27968,11 @@ do
 	Home.AddHorizontalAlignment()
 	local sessionHoneyLabel = Home.AddLabel("Session Honey: 0?")
 	local honeyPerHourLabel = Home.AddLabel("Honey per Hour: 0?")
+	Home.AddButton("Reset Stats", function()
+		state.honeyatstart = localPlayer.CoreStats.Honey.Value
+		state.start = os.clock()
+		ui.Notify("Stats", "Session honey and per-hour reset")
+	end, 100)
 	threads:Add("Stats", function()
 		while task.wait(1) do
 			local n = os.clock() - state.start
@@ -28356,6 +28358,130 @@ do
 						threads:Cancel("autodig")
 					end
 				end, "autofarm", "autodig")
+				local cloudFolder = Farming.AddFolder("Cloud Vials")
+				local cloudInfoLabel = cloudFolder.AddLabel("Cloud Vials: ? | next: -")
+				cloudFolder.AddSwitch("Only In Current Field", nil, "cloudvials", "samefieldonly")
+				local cloudSlot1 = cloudFolder.AddFolder("Slot 1")
+				cloudSlot1.AddSwitch("Enabled", nil, cfg.cloudvials.slot1, "enabled")
+				cloudSlot1.AddDropdown("Field", availableFields, true, nil, cfg.cloudvials.slot1, "field", { Field = true, Width = 250 })
+				cloudSlot1.AddSlider("Interval (minutes)", nil, 1, 15, cfg.cloudvials.slot1, "interval", { Left = true })
+				local cloudSlot2 = cloudFolder.AddFolder("Slot 2")
+				cloudSlot2.AddSwitch("Enabled", nil, cfg.cloudvials.slot2, "enabled")
+				cloudSlot2.AddDropdown("Field", availableFields, true, nil, cfg.cloudvials.slot2, "field", { Field = true, Width = 250 })
+				cloudSlot2.AddSlider("Interval (minutes)", nil, 1, 15, cfg.cloudvials.slot2, "interval", { Left = true })
+				local function cloudVialSlotReady(slotIndex, slotCfg, now)
+					if not slotCfg or not slotCfg.enabled then
+						return false
+					end
+					local targetField = slotCfg.field
+					if not targetField or not availableFields[targetField] then
+						return false
+					end
+					if cfg.cloudvials.samefieldonly and currentFieldName ~= targetField then
+						return false
+					end
+					local intervalMinutes = tonumber(slotCfg.interval) or 2
+					if intervalMinutes < 1 then
+						intervalMinutes = 1
+					end
+					local lastUsed = tonumber(cache["CloudVialSlot" .. slotIndex .. "At"]) or 0
+					return (now - lastUsed) >= intervalMinutes * 60
+				end
+				local function cloudVialUse(slotIndex, slotCfg)
+					local targetField = slotCfg.field
+					local previousField = currentFieldName
+					if not cfg.cloudvials.samefieldonly then
+						pcall(function()
+							reportStatus(3, targetField)
+							setField(targetField)
+							goToField()
+						end)
+						local movedAt = os.clock()
+						while os.clock() - movedAt < 20 do
+							local inField = false
+							pcall(function()
+								inField = getFieldAt(getRootPart().Position) == workspace.FlowerZones[targetField]
+							end)
+							if inField then
+								break
+							end
+							RunService.Heartbeat:Wait()
+						end
+					end
+					local used = nil
+					pcall(function()
+						used = inventory:Use("Cloud Vial")
+					end)
+					if used then
+						logger.log("Used Cloud Vial in", targetField, "(slot " .. slotIndex .. ")")
+					else
+						logger.warn("Cloud Vial not used (none left?) slot " .. slotIndex)
+					end
+					cache["CloudVialSlot" .. slotIndex .. "At"] = os.time()
+					saveConfig(true)
+					if not cfg.cloudvials.samefieldonly and previousField and previousField ~= targetField then
+						pcall(function()
+							setField(previousField)
+						end)
+					end
+				end
+				local function cloudVialNextIn()
+					local now = os.time()
+					local best = nil
+					for index, slotCfg in ipairs({ cfg.cloudvials.slot1, cfg.cloudvials.slot2 }) do
+						if slotCfg and slotCfg.enabled and slotCfg.field and availableFields[slotCfg.field] then
+							local intervalMinutes = tonumber(slotCfg.interval) or 2
+							if intervalMinutes < 1 then
+								intervalMinutes = 1
+							end
+							local lastUsed = tonumber(cache["CloudVialSlot" .. index .. "At"]) or 0
+							local left = math.max(0, intervalMinutes * 60 - (now - lastUsed))
+							if not best or left < best then
+								best = left
+							end
+						end
+					end
+					return best
+				end
+				cloudFolder.AddSwitch("Use Cloud Vials", function(on)
+					if on then
+						if not threads:Get("cloudvials") then
+							threads:Add("cloudvials", function()
+								local lastInfo = 0
+								while cfg.cloudvials.enabled and not state.stop do
+									local now = os.time()
+									for index, slotCfg in ipairs({ cfg.cloudvials.slot1, cfg.cloudvials.slot2 }) do
+										local okRun, runError = pcall(function()
+											if cloudVialSlotReady(index, slotCfg, now) then
+												cloudVialUse(index, slotCfg)
+											end
+										end)
+										if not okRun then
+											logger.warn("Cloud Vial slot " .. index .. " error: " .. tostring(runError))
+										end
+									end
+									if os.clock() - lastInfo > 5 then
+										lastInfo = os.clock()
+										pcall(function()
+											local owned = inventory:Fetch() or {}
+											local count = owned["Cloud Vial"] or 0
+											local nextIn = cloudVialNextIn()
+											local nextText = "-"
+											if nextIn then
+												nextText = math.floor(nextIn / 60) .. "m " .. (nextIn % 60) .. "s"
+											end
+											cloudInfoLabel.Text = "Cloud Vials: " .. tostring(count) .. " | next: " .. nextText
+										end)
+									end
+									task.wait(2)
+								end
+								threads.list["cloudvials"] = nil
+							end)
+						end
+					else
+						threads:Cancel("cloudvials")
+					end
+				end, "cloudvials", "enabled")
 				Farming.Toggle(true)
 				controls.Farming = Farming
 				farmFolder.AddSwitch("Auto Pop Star", nil, "autofarm", "autopopstar")
