@@ -1,216 +1,36 @@
--- Atlas 1.2 Xeno Support
--- executor detection: compatibility layer only for Xeno / Solara
-local atlasExecutorName = ""
-do
-	local ok, name = pcall(function()
-		if type(identifyexecutor) == "function" then
-			return identifyexecutor()
-		end
-		return ""
-	end)
-	if ok and type(name) == "string" then
-		atlasExecutorName = name
-	end
-end
-local atlasExecLower = string.lower(atlasExecutorName)
-local ATLAS_LIMITED = _G.atlasForceCompat == true
-	or string.find(atlasExecLower, "xeno", 1, true) ~= nil
-	or string.find(atlasExecLower, "solara", 1, true) ~= nil
-local ATLAS_SECURE_IDENTITY = ATLAS_LIMITED and 8 or 5
-
--- Reads the current thread identity without ever throwing.
-local function atlasIdentity()
-	local ok, value = pcall(function()
-		if type(getthreadidentity) == "function" then
-			return getthreadidentity()
-		end
-		return nil
-	end)
-	if ok and type(value) == "number" then
-		return value
-	end
-	return nil
-end
-
--- Tries hard to get identity 8. Returns the final identity (number or nil).
-local function atlasRaiseIdentity()
-	local id = atlasIdentity()
-	if id and id >= 8 then
-		return id
-	end
-	if type(setthreadidentity) == "function" then
-		pcall(setthreadidentity, 8)
-		id = atlasIdentity()
-		if id and id >= 8 then
-			return id
-		end
-		pcall(setthreadidentity, 7)
-		pcall(setthreadidentity, 8)
-		id = atlasIdentity()
-	end
-	return id
-end
-
-if ATLAS_LIMITED then
-	if _G.loading and _G.atlas and _G.atlas.Parent then
-		return
-	end
-else
-	if _G.loading then
-		return
-	end
-end
+-- Atlas 1.0 Surgut
+if _G.loading then return end
 _G.loading = true
-pcall(function()
-	_G.loadingAt = os.clock()
-end)
-
-if ATLAS_LIMITED then
-	-- NOTE: never call setthreadidentity() on Xeno/Solara. There it changes the
-	-- identity of the whole client, so game LocalScripts lose identity 8 and every
-	-- require() spams "Cannot require a RobloxScript module from a non RobloxScript context".
-	local atlasEnv = (type(getgenv) == "function" and getgenv()) or _G
-	local function atlasSetGlobal(name, value)
-		-- getgenv() is read-only on Xeno/Solara: a bare assignment raises
-		-- "attempt to modify a readonly table" and kills the whole script.
-		-- Try every env we can reach, silently.
-		local targets = { atlasEnv, _G }
-		local okEnv = pcall(function()
-			if type(getfenv) == "function" then
-				local env = getfenv(0)
-				if type(env) == "table" then
-					table.insert(targets, env)
-				end
-			end
-		end)
-		for _, target in ipairs(targets) do
-			if type(target) == "table" then
-				local okWrite = pcall(function()
-					if type(target[name]) ~= "function" then
-						target[name] = value
-					end
-				end)
-				if not okWrite then
-					pcall(rawset, target, name, value)
-				end
-			end
-		end
-	end
-	local function atlasShim(name, fallback)
-		atlasSetGlobal(name, fallback)
-	end
-	atlasShim("newcclosure", function(fn) return fn end)
-	atlasShim("isfunctionhooked", function() return false end)
-	atlasShim("setthreadidentity", function() end)
-	atlasShim("getthreadidentity", function() return 8 end)
-	atlasShim("getconnections", function() return {} end)
-	atlasShim("fireclickdetector", function() end)
-	atlasShim("restorefunction", function() end)
-	atlasShim("hookfunction", function(original) return original end)
-	-- file API: configs simply will not persist if the executor lacks it,
-	-- but the script must not die right after the Home tab is built
-	atlasShim("isfolder", function() return false end)
-	atlasShim("makefolder", function() end)
-	atlasShim("writefile", function() end)
-	atlasShim("readfile", function() return "" end)
-	atlasShim("isfile", function() return false end)
-	atlasShim("appendfile", function() end)
-	atlasShim("delfile", function() end)
-	atlasShim("listfiles", function() return {} end)
-	if type(atlasEnv.gethui) ~= "function" then
-		atlasEnv.gethui = function() return nil end
-	end
-
-	if type(getthreadidentity) == "function" and getthreadidentity() < 8 then
-		local okSC = pcall(function()
-			game:GetService("StarterGui"):SetCore("SendNotification", { Title = "Warning", Text = "Your executor identity is below 8, some features may fail.", Duration = 10 })
-		end)
-		if not okSC then
-			warn("[Atlas] executor identity below 8, continuing anyway")
-		end
-	end
-else
-	if not getthreadidentity or getthreadidentity() < 8 then
-		return (cloneref and cloneref(game:GetService("StarterGui")) or game:GetService("StarterGui")):SetCore("SendNotification", { Title = "Warning", Text = "Your executor is not supported.", Duration = 10 })
-	end
-end
+if not getthreadidentity or getthreadidentity()<8 then return(cloneref and cloneref(game:GetService("StarterGui")) or game:GetService("StarterGui")):SetCore("SendNotification",{Title="Warning",Text="Your executor is not supported.",Duration=10})end
 while not game:IsLoaded() do
 	task.wait()
 end
 local function getService(serviceName)
-	-- Xeno/Solara: cloneref returns a wrapper userdata. Requiring game modules
-	-- through a wrapped ReplicatedStorage makes Roblox bind them to a bogus
-	-- security context, which is exactly what produces the endless
-	-- "Cannot require a RobloxScript module" spam from RainbowPartAnimator,
-	-- Activatables, Quests, StatReqs and friends.
-	if ATLAS_LIMITED then
-		return game:GetService(serviceName)
-	end
 	return cloneref and cloneref(game:GetService(serviceName)) or game:GetService(serviceName)
 end
 local VirtualInputManager = getService("VirtualInputManager")
 local ReplicatedStorage = getService("ReplicatedStorage")
 local UserInputService = getService("UserInputService")
 local TeleportService = getService("TeleportService")
-local PlayersService = getService("Players")
-local localPlayer = PlayersService.LocalPlayer
-if ATLAS_LIMITED then
-	do
-		local waitStart = os.clock()
-		while not localPlayer and os.clock() - waitStart < 30 do
-			task.wait(0.1)
-			localPlayer = PlayersService.LocalPlayer
-		end
-	end
-	if not localPlayer then
-		warn("[Atlas] LocalPlayer is nil, aborting")
-		return
-	end
-end
+local localPlayer = getService("Players").LocalPlayer
 local TweenService = getService("TweenService")
 local HttpService = getService("HttpService")
 local VirtualUser = getService("VirtualUser")
 local RunService = getService("RunService")
 local Lighting = getService("Lighting")
-if ATLAS_LIMITED then
-	local waitStart = os.clock()
-	while not localPlayer.PlayerGui:FindFirstChild("LoadingScreenGui")
-		or (localPlayer.PlayerGui.LoadingScreenGui:FindFirstChild("LoadingMessage")
-			and localPlayer.PlayerGui.LoadingScreenGui.LoadingMessage.Visible) do
-		if os.clock() - waitStart > 15 then
-			break
-		end
-		RunService.Heartbeat:Wait()
-	end
-else
-	while not localPlayer.PlayerGui:FindFirstChild("LoadingScreenGui") or localPlayer.PlayerGui.LoadingScreenGui.LoadingMessage.Visible do
-		RunService.Heartbeat:Wait()
-	end
+while not localPlayer.PlayerGui:FindFirstChild("LoadingScreenGui") or localPlayer.PlayerGui.LoadingScreenGui.LoadingMessage.Visible do
+	RunService.Heartbeat:Wait()
 end
 local userIdFlags = {}
 local function getUrl(fileName, v5)
-	if fileName == "script.lua" then
-	end
-	if fileName == "script.lua" or fileName == "hivehub.lua" then
-		return _G.githuburl and _G.githuburl .. "/" .. fileName or "https://raw.githubusercontent.com/Chris12089/atlasbss/main/" .. fileName
-	end
+	-- raw.githubusercontent.com removed: script.lua / hivehub.lua are no longer fetched.
 	if not v5 then
 		return _G.weburl and _G.weburl .. "/" .. fileName or "https://chris12089.github.io/atlas/" .. fileName
 	end
-	return _G.serverurl and _G.serverurl .. "/" .. fileName or "https://PLACEHOLDER.invalid/" .. fileName
-end
-if game.PlaceId == 15579077077 then
-	return loadstring(game:HttpGet(getUrl("hivehub.lua")))()
+	return _G.serverurl and _G.serverurl .. "/" .. fileName or "https://atlas.invalid/" .. fileName
 end
 if game.PlaceId ~= 1537690962 then
 	local StarterGui = getService("StarterGui")
-	if ATLAS_LIMITED then
-		pcall(function()
-			StarterGui:SetCore("SendNotification", { Title = "Warning", Text = "You're not in Bee Swarm Simulator.", Duration = 5 })
-		end)
-		warn("[Atlas] not in Bee Swarm Simulator (PlaceId " .. tostring(game.PlaceId) .. ")")
-		return
-	end
 	return StarterGui:SetCore("SendNotification", { Title = "Warning", Text = "You're not in Bee Swarm Simulator.", Duration = 5 })
 end
 if identifyexecutor then
@@ -301,7 +121,7 @@ local cfg = {
 		sharebeans = false,
 		craft = false,
 		toys = false,
-		blooms = true,
+		blooms = false,
 		tools = false,
 		oldtool = false,
 		planters = false,
@@ -324,7 +144,7 @@ local cfg = {
 		blackbear2 = false,
 		brownbear = false,
 		buckobee = false,
-		rileybee = true,
+		rileybee = false,
 		honeybee = false,
 		polarbear = false,
 	},
@@ -368,12 +188,6 @@ local cfg = {
 		snail4 = false,
 		star3 = false,
 		star4 = false,
-	},
-	cloudvials = {
-		enabled = false,
-		samefieldonly = false,
-		slot1 = { enabled = true, field = "Pine Tree Forest", interval = 2 },
-		slot2 = { enabled = false, field = "Dandelion Field", interval = 5 },
 	},
 	ant = { enabled = false, antpass = false },
 	beesmas = {
@@ -1194,270 +1008,77 @@ end
 local threads = { list = {} }
 local connections = { list = {} }
 gameApi.SetupSecureCall = function()
-	if secureCall then
-		return
-	end
-	local warnedNilCall = false
-	local function isCallable(fn, where)
-		if type(fn) == "function" then
-			return true
-		end
-		if not warnedNilCall then
-			warnedNilCall = true
-			pcall(function()
-				logger.warn("[Atlas] secureCall got nil instead of a function (" .. tostring(where)
-					.. ") - that game module is not loaded, related feature is disabled")
-			end)
-		end
-		return false
-	end
-	if ATLAS_LIMITED then
-		-- Xeno/Solara: call directly (a spawned thread inherits an identity that
-		-- cannot require RobloxScript modules), but force identity 8 first so the
-		-- call always runs in the same context the game modules expect.
-		secureCall = function(n, ...)
-			if not isCallable(n, "limited") then
-				return nil
-			end
-			return n(...)
-		end
-		return
-	end
-	secureCall = newcclosure(function(n, ...)
-		-- A game module that failed to load leaves gameApi.<x> = nil. Without this
-		-- guard every call throws "attempt to call a nil value", the calling loop
-		-- dies and the warning repeats forever.
-		if not isCallable(n, "standard") then
-			return nil
-		end
-		local Z, p
-		local q
-		threadCount += 1
-		threads.list[threadCount] = task.spawn(function(...)
-			setthreadidentity(ATLAS_SECURE_IDENTITY)
-			Z, p = pcall(function(...)
-				return table.pack(n(...))
+	if not secureCall then
+		secureCall = newcclosure(function(n, ...)
+			local Z, p
+			local q
+			threadCount += 1
+			threads.list[threadCount] = task.spawn(function(...)
+				setthreadidentity(5)
+				Z, p = pcall(function(...)
+					return table.pack(n(...))
+				end, ...)
+				q = true
 			end, ...)
-			q = true
-		end, ...)
-		while not q do
-			task.wait()
-		end
-		if not Z then
-			error(p)
-		end
-		return table.unpack(p)
-	end)
+			while not q do
+				task.wait()
+			end
+			if not Z then
+				error(p)
+			end
+			return table.unpack(p)
+		end)
+	end
 end
 gameApi.Setup = function(api)
-	if not ATLAS_LIMITED then
-		api.Events = ReplicatedStorage.Events
-		api.Badges = require(ReplicatedStorage.Badges)
-		api.ItemPackages = require(ReplicatedStorage.ItemPackages)
-		api.ClientStatCache = require(ReplicatedStorage.ClientStatCache)
-		api.CyclingShopTools = require(ReplicatedStorage.ShopTools.CyclingShopTools)
-		api.StickerStack = require(ReplicatedStorage.StickerStack)
-		api.Quests = require(ReplicatedStorage.Quests)
-		api.BuffTile = require(ReplicatedStorage.Gui.TileDisplay.BuffTile).GetBuffTile
-		api.MemoryMatch = require(ReplicatedStorage.Gui.MemoryMatch).RegisterTileSelected
-		api.LocalCollect = require(ReplicatedStorage.Collectors.LocalCollect).Run
-		api.LocalPlanters = require(ReplicatedStorage.LocalPlanters).CheckForNearbyHarvestablePlanters
-		api.MemoryMatchManager = require(ReplicatedStorage.MemoryMatchManager).SetActiveGame
-		api.ClientMonsterTools = require(ReplicatedStorage.ClientMonsterTools).GetSpawnerCooldown
-		api.RoboBearGuiClose = require(ReplicatedStorage.Gui.RoboBearGui).ClosePromptBox
-		api.GateManager = require(ReplicatedStorage.GateManager).UpdateGateColors
-		api.Blender = require(ReplicatedStorage.BlenderRecipes).Get
-		api.EggTypes = require(ReplicatedStorage.EggTypes).GetTypes
-		api.StatReqs = require(ReplicatedStorage.StatReqs).Check
-		api.BeeMutations = require(ReplicatedStorage.BeeStats.BeeMutations)
-		api.Amulets = require(game.ReplicatedStorage.Amulets).ModsDescription
-		api.StatModifiers = require(ReplicatedStorage.StatModifiers).Description
-		api.BeeStatMods = require(ReplicatedStorage.BeeStats.BeeStatMods).GetType
-		api.WaxTypes = require(game.ReplicatedStorage.WaxTypes).ByID
-		-- Skip Activatables modules: on Xeno/Solara they spawn cosmetic loops in low-identity threads,
-		-- causing "Cannot require a RobloxScript module" spam every frame. Atlas checks for their
-		-- presence before calling, so skipping them is safe.
-		-- local activatables = ReplicatedStorage.Activatables
-		-- api.Hives = require(activatables.Hives).ButtonEffect
-		-- api.NPCs = require(activatables.NPCs).ButtonEffect
-		-- api.Shops = require(activatables.Shops).ButtonEffect
-		-- api.Toys = require(activatables.Toys).ButtonEffect
-		-- api.ToysText = require(activatables.Toys).ButtonText
-		secureCall(api.LocalCollect)
-		if type(debug.getupvalue(api.LocalPlanters, 1)) ~= "table" then
-			error("debug.getupvalue failed")
-		end
-		if not getconnections(gameGui.Dialog.ButtonOverlay.MouseButton1Click)[1].Function then
-			error("getconnections failed")
-		end
-		return
+	api.Events = ReplicatedStorage.Events
+	api.Badges = require(ReplicatedStorage.Badges)
+	api.ItemPackages = require(ReplicatedStorage.ItemPackages)
+	api.ClientStatCache = require(ReplicatedStorage.ClientStatCache)
+	api.CyclingShopTools = require(ReplicatedStorage.ShopTools.CyclingShopTools)
+	api.StickerStack = require(ReplicatedStorage.StickerStack)
+	api.Quests = require(ReplicatedStorage.Quests)
+	api.BuffTile = require(ReplicatedStorage.Gui.TileDisplay.BuffTile).GetBuffTile
+	api.MemoryMatch = require(ReplicatedStorage.Gui.MemoryMatch).RegisterTileSelected
+	api.LocalCollect = require(ReplicatedStorage.Collectors.LocalCollect).Run
+	api.LocalPlanters = require(ReplicatedStorage.LocalPlanters).CheckForNearbyHarvestablePlanters
+	api.MemoryMatchManager = require(ReplicatedStorage.MemoryMatchManager).SetActiveGame
+	api.ClientMonsterTools = require(ReplicatedStorage.ClientMonsterTools).GetSpawnerCooldown
+	api.RoboBearGuiClose = require(ReplicatedStorage.Gui.RoboBearGui).ClosePromptBox
+	api.GateManager = require(ReplicatedStorage.GateManager).UpdateGateColors
+	api.Blender = require(ReplicatedStorage.BlenderRecipes).Get
+	api.EggTypes = require(ReplicatedStorage.EggTypes).GetTypes
+	api.StatReqs = require(ReplicatedStorage.StatReqs).Check
+	api.BeeMutations = require(ReplicatedStorage.BeeStats.BeeMutations)
+	api.Amulets = require(game.ReplicatedStorage.Amulets).ModsDescription
+	api.StatModifiers = require(ReplicatedStorage.StatModifiers).Description
+	api.BeeStatMods = require(ReplicatedStorage.BeeStats.BeeStatMods).GetType
+	api.WaxTypes = require(game.ReplicatedStorage.WaxTypes).ByID
+	local activatables = ReplicatedStorage.Activatables
+	api.Hives = require(activatables.Hives).ButtonEffect
+	api.NPCs = require(activatables.NPCs).ButtonEffect
+	api.Shops = require(activatables.Shops).ButtonEffect
+	api.Toys = require(activatables.Toys).ButtonEffect
+	api.ToysText = require(activatables.Toys).ButtonText
+	secureCall(api.LocalCollect)
+	if type(debug.getupvalue(api.LocalPlanters, 1)) ~= "table" then
+		error("debug.getupvalue failed")
 	end
-
-	-- Xeno / Solara: loading game modules is what triggers the endless
-	-- "Cannot require a RobloxScript module" spam. Load only the minimum the core
-	-- features need. _G.atlasModuleMode = "full" loads everything, "off" loads nothing.
-	local setupIdentity = atlasIdentity()
-	local moduleMode = _G.atlasModuleMode or "full"
-	local function may(key)
-		return moduleMode ~= "off"
-	end
-	warn("[Atlas] modules mode=" .. tostring(moduleMode) .. " identity=" .. tostring(setupIdentity))
-
-	-- Xeno / Solara: every path is resolved and required inside pcall,
-	-- so a single missing or renamed module cannot abort the whole setup.
-	local function resolvePath(pathString)
-		local node = ReplicatedStorage
-		for part in string.gmatch(pathString, "[^%.]+") do
-			local ok, child = pcall(function()
-				return node[part]
-			end)
-			if not ok or child == nil then
-				return nil
-			end
-			node = child
-		end
-		return node
-	end
-
-	local function safeRequire(pathString, field)
-		local node = resolvePath(pathString)
-		if node == nil then
-			warn("[Atlas] module missing: " .. tostring(pathString))
-			return nil
-		end
-		local ok, res = pcall(function()
-			return require(node)
-		end)
-		if not ok then
-			warn("[Atlas] require failed: " .. tostring(pathString) .. " -> " .. tostring(res))
-			return nil
-		end
-		if field == nil then
-			return res
-		end
-		local okField, value = pcall(function()
-			return res[field]
-		end)
-		if not okField then
-			warn("[Atlas] field missing: " .. tostring(field) .. " on " .. tostring(pathString))
-			return nil
-		end
-		return value
-	end
-
-	local okSetup, setupError = pcall(function()
-		api.Events = may("Events") and resolvePath("Events") or nil
-		api.Badges = may("Badges") and safeRequire("Badges") or nil
-		api.ItemPackages = may("ItemPackages") and safeRequire("ItemPackages") or nil
-		api.ClientStatCache = may("ClientStatCache") and safeRequire("ClientStatCache") or nil
-		api.CyclingShopTools = may("CyclingShopTools") and safeRequire("ShopTools.CyclingShopTools") or nil
-		api.StickerStack = may("StickerStack") and safeRequire("StickerStack") or nil
-		api.Quests = may("Quests") and safeRequire("Quests") or nil
-		api.BuffTile = may("BuffTile") and safeRequire("Gui.TileDisplay.BuffTile", "GetBuffTile") or nil
-		api.MemoryMatch = may("MemoryMatch") and safeRequire("Gui.MemoryMatch", "RegisterTileSelected") or nil
-		api.LocalCollect = may("LocalCollect") and safeRequire("Collectors.LocalCollect", "Run") or nil
-		api.LocalPlanters = may("LocalPlanters") and safeRequire("LocalPlanters", "CheckForNearbyHarvestablePlanters") or nil
-		api.MemoryMatchManager = may("MemoryMatchManager") and safeRequire("MemoryMatchManager", "SetActiveGame") or nil
-		api.ClientMonsterTools = may("ClientMonsterTools") and safeRequire("ClientMonsterTools", "GetSpawnerCooldown") or nil
-		api.RoboBearGuiClose = may("RoboBearGuiClose") and safeRequire("Gui.RoboBearGui", "ClosePromptBox") or nil
-		api.GateManager = may("GateManager") and safeRequire("GateManager", "UpdateGateColors") or nil
-		api.Blender = may("Blender") and safeRequire("BlenderRecipes", "Get") or nil
-		api.EggTypes = may("EggTypes") and safeRequire("EggTypes", "GetTypes") or nil
-		api.StatReqs = may("StatReqs") and safeRequire("StatReqs", "Check") or nil
-		api.BeeMutations = may("BeeMutations") and safeRequire("BeeStats.BeeMutations") or nil
-		api.Amulets = may("Amulets") and safeRequire("Amulets", "ModsDescription") or nil
-		api.StatModifiers = may("StatModifiers") and safeRequire("StatModifiers", "Description") or nil
-		api.BeeStatMods = may("BeeStatMods") and safeRequire("BeeStats.BeeStatMods", "GetType") or nil
-		api.WaxTypes = may("WaxTypes") and safeRequire("WaxTypes", "ByID") or nil
-		-- Skip Activatables, Hives, NPCs, Shops, Toys on Xeno/Solara: they spawn low-identity loops
-		-- that spam "Cannot require a RobloxScript module" every frame.
-		-- Atlas checks for api.Hives/NPCs/etc before calling, so skipping them is safe.
-		if not ATLAS_LIMITED then
-			api.Hives = safeRequire("Activatables.Hives", "ButtonEffect")
-			api.NPCs = safeRequire("Activatables.NPCs", "ButtonEffect")
-			api.Shops = safeRequire("Activatables.Shops", "ButtonEffect")
-			api.Toys = safeRequire("Activatables.Toys", "ButtonEffect")
-			api.ToysText = safeRequire("Activatables.Toys", "ButtonText")
-		end
-
-		if api.LocalCollect and not ATLAS_LIMITED then
-			pcall(function()
-				secureCall(api.LocalCollect)
-			end)
-		end
-		pcall(function()
-			if api.LocalPlanters and type(debug.getupvalue(api.LocalPlanters, 1)) ~= "table" then
-				warn("[Atlas] debug.getupvalue returned unexpected value on LocalPlanters")
-			end
-		end)
-		pcall(function()
-			local conns = getconnections(gameGui.Dialog.ButtonOverlay.MouseButton1Click)
-			if not conns or not conns[1] or not conns[1].Function then
-				warn("[Atlas] getconnections returned no connection on Dialog")
-			end
-		end)
-	end)
-
-	if not okSetup then
-		warn("[Atlas] setup error: " .. tostring(setupError))
-	end
-
-	local missingNames = {}
-	for _, key in ipairs({
-		"ClientStatCache", "Quests", "Events", "ItemPackages", "LocalPlanters",
-		"LocalCollect", "Badges", "CyclingShopTools", "StickerStack", "BuffTile",
-		"MemoryMatch", "MemoryMatchManager", "ClientMonsterTools", "RoboBearGuiClose",
-		"GateManager", "Blender", "EggTypes", "StatReqs", "BeeMutations", "Amulets",
-		"StatModifiers", "BeeStatMods", "WaxTypes", "Hives", "NPCs", "Shops", "Toys", "ToysText",
-	}) do
-		if api[key] == nil then
-			table.insert(missingNames, key)
-		end
-	end
-	if #missingNames > 0 then
-		warn("[Atlas] unavailable modules (" .. tostring(#missingNames) .. "): " .. table.concat(missingNames, ", "))
-	end
-end
-local gameApiWarned = {}
-local function warnMissingGameApi(key)
-	if not gameApiWarned[key] then
-		gameApiWarned[key] = true
-		pcall(function()
-			logger.warn("[Atlas] gameApi." .. key .. " is unavailable - feature relying on it is disabled")
-		end)
+	if not getconnections(gameGui.Dialog.ButtonOverlay.MouseButton1Click)[1].Function then
+		error("getconnections failed")
 	end
 end
 gameApi.Cache = function(api, ...)
-	if not api.ClientStatCache or type(api.ClientStatCache.Get) ~= "function" then
-		warnMissingGameApi("ClientStatCache.Get")
-		return nil
-	end
 	return secureCall(api.ClientStatCache.Get, nil, ...)
 end
 gameApi.CacheUpdate = function(api, ...)
-	if not api.ClientStatCache or type(api.ClientStatCache.Update) ~= "function" then
-		warnMissingGameApi("ClientStatCache.Update")
-		return nil
-	end
 	return secureCall(api.ClientStatCache.Update, nil, ...)
 end
 gameApi.CacheSet = function(api, ...)
-	if not api.ClientStatCache or type(api.ClientStatCache.Set) ~= "function" then
-		warnMissingGameApi("ClientStatCache.Set")
-		return nil
-	end
 	return secureCall(api.ClientStatCache.Set, nil, ...)
 end
 gameApi.Event = function(api, eventName, ...)
-	if not api.Events then
-		warnMissingGameApi("Events")
-		return nil
-	end
 	local remote = api.Events[eventName]
-	if not remote then
-		warnMissingGameApi("Events." .. tostring(eventName))
-		return nil
-	end
 	if not remote:IsA("RemoteEvent") then
 		return remote:InvokeServer(...)
 	end
@@ -1688,26 +1309,12 @@ if _G.atlas then
 	end
 end
 local ScreenGui = Instance.new("ScreenGui")
-if ATLAS_LIMITED then
-	local bootIdentity = atlasIdentity()
-	warn("[Atlas] boot | executor=" .. tostring(atlasExecutorName)
-		.. " | identity=" .. tostring(bootIdentity)
-		.. " | build=3"
-		.. " | compat=on")
-end
 local mobileToggleButton, controls, currentField, position, currentFieldName, vector, availableFields, setField, getFieldAt, isPathClear
 local randomFieldPosition, updateAvailableFields, tracked, watchBalloons, watchClouds, watchDupedTokens, watchStations, watchAlerts, watchFlames, watchFlowers
 local watchBlooms, watchNpcBees, watchRbcMobs, findMeteor
 do
-	pcall(function()
-		ScreenGui.ScreenInsets = Enum.ScreenInsets.None
-	end)
-	local parentOk = pcall(function()
-		ScreenGui.Parent = gethui and gethui() or getService("CoreGui")
-	end)
-	if not parentOk then
-		ScreenGui.Parent = getService("CoreGui")
-	end
+	ScreenGui.ScreenInsets = Enum.ScreenInsets.None
+	ScreenGui.Parent = gethui and gethui() or getService("CoreGui")
 	_G.atlas = ScreenGui
 	local visible = true
 	local fieldClones = {}
@@ -1822,7 +1429,7 @@ do
 			dragState = nil
 		end
 	end))
-	local title = _G.title and string.find(string.lower(_G.title), "atlas") and not string.find(string.lower(_G.title), "pre") and not string.find(string.lower(_G.title), "paid") and _G.title or "Atlas 1.2 Xeno Support"
+	local title = _G.title and string.find(string.lower(_G.title), "atlas") and not string.find(string.lower(_G.title), "pre") and not string.find(string.lower(_G.title), "paid") and _G.title or "Atlas 1.0 Surgut"
 	local uicolor = _G.uicolor and _G.uicolor or Color3.fromRGB(41, 74, 122)
 	local isDesktop = ScreenGui.AbsoluteSize.X >= 850 and ScreenGui.AbsoluteSize.Y >= 500
 	if _G.background then
@@ -5371,31 +4978,13 @@ do
 		if cfg.misc.autorejoin2 then
 			task.wait(3)
 			TeleportService:TeleportCancel()
-			-- A private server cannot be re-joined with a plain Teleport(placeId):
-			-- it silently fails. Use the stored PrivateServerId instead.
-			if game.PrivateServerId ~= "" then
-				pcall(function()
-					TeleportService:TeleportToPrivateServer(game.PlaceId, game.PrivateServerId, { localPlayer })
-				end)
-			else
-				pcall(function()
-					TeleportService:Teleport(game.PlaceId, localPlayer)
-				end)
-			end
+			TeleportService:Teleport(game.PlaceId, localPlayer)
 		end
 	end))
 	connections:Add("reconnect", TeleportService.TeleportInitFailed:Connect(function()
 		task.wait(3)
 		TeleportService:TeleportCancel()
-		if game.PrivateServerId ~= "" then
-			pcall(function()
-				TeleportService:TeleportToPrivateServer(game.PlaceId, game.PrivateServerId, { localPlayer })
-			end)
-		else
-			pcall(function()
-				TeleportService:Teleport(game.PlaceId, localPlayer)
-			end)
-		end
+		TeleportService:Teleport(game.PlaceId, localPlayer)
 	end))
 	connections:Add("particles", workspace.Particles.ChildAdded:Connect(function(n)
 		local L = n.Name
@@ -5915,42 +5504,18 @@ do
 		end
 		return bestMeteor.v, bestMeteor.field
 	end
-	-- VirtualInputManager methods need the RobloxScript capability. On some
-	-- executors they raise "The current thread cannot call 'SendMouseButtonEvent'"
-	-- which used to abort whatever called them (hive claim, quests, conversion).
-	-- Every call is best-effort now, with keypress/keyrelease as a fallback.
-	local function virtualMouseClick()
-		return pcall(function()
-			VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, localPlayer, 1)
-			VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, localPlayer, 1)
-		end)
-	end
-	local function virtualKey(down, key)
-		local ok = pcall(function()
-			VirtualInputManager:SendKeyEvent(down, key, false, localPlayer)
-		end)
-		if ok then
-			return true
-		end
-		if down and type(keypress) == "function" then
-			return pcall(keypress, key)
-		end
-		if not down and type(keyrelease) == "function" then
-			return pcall(keyrelease, key)
-		end
-		return false
-	end
 	input.prepareInput = function()
-		virtualMouseClick()
+		VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, localPlayer, 1)
+		VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, localPlayer, 1)
 		RunService.Heartbeat:Wait()
 	end
 	input.pressKey = function(key, hold)
-		virtualKey(true, key)
+		VirtualInputManager:SendKeyEvent(true, key, false, localPlayer)
 		if hold then
 			RunService.Heartbeat:Wait()
 			RunService.Heartbeat:Wait()
 		end
-		virtualKey(false, key)
+		VirtualInputManager:SendKeyEvent(false, key, false, localPlayer)
 		RunService.Heartbeat:Wait()
 	end
 end
@@ -5965,73 +5530,6 @@ input.pressButton = function(owner, button, v63, v64, useActivated)
 		secureCall(firesignal, button.Activated)
 	end
 	RunService.Heartbeat:Wait()
-end
--- Taps the on-screen ActivateButton instead of synthesising the E key.
--- On mobile clients the game listens to touch on the button, so SendKeyEvent
--- silently does nothing and hive/quest interactions never register.
-input.tapActivateButton = function(owner)
-	local activateButton = gameGui.ActivateButton
-	if not activateButton then
-		return false
-	end
-	local candidates = { activateButton }
-	for _, child in ipairs(activateButton:GetDescendants()) do
-		table.insert(candidates, child)
-	end
-	-- The prompt can listen to different signals depending on platform, and the
-	-- handler may sit on a child object rather than the frame. Try every candidate
-	-- and every common click signal before giving up.
-	if type(getconnections) == "function" then
-		local signalNames = { "MouseButton1Click", "Activated", "MouseButton1Down", "InputBegan" }
-		for _, object in ipairs(candidates) do
-			for _, signalName in ipairs(signalNames) do
-				local fired = false
-				pcall(function()
-					local signal = object[signalName]
-					if signal == nil then
-						return
-					end
-					local connectionList = getconnections(signal)
-					local connection = connectionList and connectionList[1]
-					if connection then
-						if connection.Fire then
-							connection:Fire()
-							fired = true
-						elseif connection.Function then
-							connection.Function()
-							fired = true
-						end
-					end
-				end)
-				if fired then
-					return true
-				end
-			end
-		end
-	end
-	-- Pointer click needs the RobloxScript capability. On executors that block it
-	-- this pcall fails, clicked stays false and the caller falls back to the E key.
-	local before = nil
-	pcall(function()
-		before = activateButton.TextBox.Text
-	end)
-	local clicked = false
-	pcall(function()
-		local x, y = input.getButtonPosition(activateButton)
-		VirtualInputManager:SendMouseButtonEvent(x, y, 1, true, localPlayer, 1)
-		VirtualInputManager:SendMouseButtonEvent(x, y, 1, false, localPlayer, 1)
-		clicked = true
-	end)
-	if not clicked then
-		return false
-	end
-	RunService.Heartbeat:Wait()
-	RunService.Heartbeat:Wait()
-	local after = nil
-	pcall(function()
-		after = activateButton.TextBox.Text
-	end)
-	return before ~= nil and after ~= nil and before ~= after
 end
 input.pressActivateButton = function(owner, shouldPress, throwIfBlocked)
 	waitForLanding()
@@ -6048,11 +5546,6 @@ input.pressActivateButton = function(owner, shouldPress, throwIfBlocked)
 	end
 	if not shouldPress then
 		return activateButton.TextBox.Text
-	end
-	-- Touch clients ignore synthetic key events, so tap the button itself first.
-	if owner.tapActivateButton and owner.tapActivateButton(owner) then
-		RunService.Heartbeat:Wait()
-		return true
 	end
 	owner.prepareInput()
 	owner.pressKey(Enum.KeyCode.E)
@@ -9790,9 +9283,7 @@ ump1,3545,3558,-1391:Jump1;3547=-3532,3558,-3534,3546,-3529;3548=3537,3536,3549,
 		end,
 		ClientCall = function(callName, callArg)
 			if callName == "CompleteQuest" or callName == "CompleteQuestFromPool" then
-				if not ATLAS_LIMITED then
-					setthreadidentity(8)
-				end
+				setthreadidentity(8)
 				local stats = discord.stats
 				stats["Quests Done"] = stats["Quests Done"] + 1
 				local questInfo = callName == "CompleteQuest" and secureCall(gameApi.Quests.Get, nil, callArg)
@@ -19741,7 +19232,8 @@ Content-Disposition: form-data; name="file[0]"; filename="image.png"
 					table.insert(missingIngredients, requiredIngredient)
 				end
 			end
-			for _, missingIngredient in ipairs(missingIngredients) do
+			local v147, v148, v149
+			for _, missingIngredient in v147, v148, v149 do
 				if cfg.toys.progblender then
 					logger.log(logPrefix, "Crafting x" .. count, recipe)
 					logger.log(logPrefix, "Missing x" .. missingIngredient.Amount, missingIngredient.Type)
@@ -21338,24 +20830,14 @@ Content-Disposition: form-data; name="file[0]"; filename="image.png"
 							end
 						end
 					else
-						-- gameApi.Hives is nil when the game module changed its exports.
-						-- Pressing the on-screen button does the same thing a player does.
-						if type(gameApi.Hives) == "function" then
-							pcall(function()
-								secureCall(gameApi.Hives, localPlayer, state.hive.Platform.Value)
-							end)
-						end
-						local beforeText = activateResult
+						secureCall(gameApi.Hives, localPlayer, state.hive.Platform.Value)
 						local now = os.clock()
 						while not (input:pressActivateButton() == "Stop Making Honey" or not (os.clock() - now < 2)) do
 							RunService.Heartbeat:Wait()
 						end
-						local afterText = input:pressActivateButton()
-						-- The game renamed the prompt in newer versions, so a changed
-						-- text counts as success even if it is not exactly the old string.
-						if afterText ~= "Stop Making Honey" and afterText == beforeText then
+						if input:pressActivateButton() ~= "Stop Making Honey" then
 							logger.warn("Failed to press convert button")
-							logger.warn("Debug:", tostring(afterText))
+							logger.warn("Debug:", input:pressActivateButton())
 						end
 					end
 				end)
@@ -24200,7 +23682,7 @@ do
 												v140.Type = "Share"
 											elseif not (v139.Type ~= "Craft Ingredients" or not autoquest.craft) then
 												v140.Type = "Craft"
-											elseif v139.Type == "Have Total" and type(v139.Tag) == "table" and v139.Tag[1] == "Petals" and (autoquest.blooms == true or v139.Tag[4] ~= nil) and (v139.Tag[4] == nil or availableFields[v139.Tag[4]] == true) then
+											elseif not (v139.Type ~= "Have Total" or not autoquest.blooms or type(v139.Tag) ~= "table" or v139.Tag[1] ~= "Petals" or not (not v139.Tag[4] or availableFields[v139.Tag[4]])) then
 												v140.Type = "Blooms"
 											elseif not (v139.Type ~= "Use Items" or not autoquest.rj or v139.Item ~= "RoyalJelly") then
 												v140.Type = "RJ"
@@ -28230,74 +27712,25 @@ if isfile("atlasplanters-" .. localPlayer.Name .. ".json") then
 		planterInfo.timers = timers
 	end
 end
-	-- Config sanity pass: an imported or hand-edited config may hold a boolean
-	-- where the runtime indexes a table. Without this, whole features die on the
-	-- first use. Example: cfg.boosters.allowed = false makes toyUse.Do throw when
-	-- a toy reports "discover 5 blue bee types", and Auto Toys stops doing anything.
-	do
-		local tableFields = {
-			{ cfg.boosters, "allowed" },
-			{ cfg.toys, "materials2" },
-			{ cfg.autoquest, "allowedplanters" },
-			{ cfg.misc, "bqbuyconf" },
-			{ cfg.rbc, "buydrives" },
-			{ cfg.rbc, "usedrives" },
-			{ cfg.autoquest, "claim2" },
-		}
-		for _, entry in ipairs(tableFields) do
-			local parent, key = entry[1], entry[2]
-			if type(parent) == "table" and type(parent[key]) ~= "table" then
-				parent[key] = {}
-			end
-		end
-		if type(cfg.autofarm.prioritytokens) ~= "table" then
-			cfg.autofarm.prioritytokens = false
-		end
-		if type(cfg.hive.beetypes) ~= "table" then
-			cfg.hive.beetypes = false
-		end
-	end
-	local setupAttempts = 0
-	-- Xeno/Solara: skip game cosmetic modules entirely in Setup, call Setup once from main thread
-	if ATLAS_LIMITED then
-		local okSecure = pcall(gameApi.SetupSecureCall)
-		if okSecure then
-			pcall(gameApi.Setup, gameApi)
-		end
-	else
-		-- Other executors: keep the original retry loop
-		while not (not (setupAttempts < 5) or not (not pcall(gameApi.SetupSecureCall) or not pcall(gameApi.Setup, gameApi))) do
-			task.wait(0.1)
-			setupAttempts += 1
-		end
-		if setupAttempts == 5 then
-			local StarterGui = getService("StarterGui")
-			pcall(function()
-				StarterGui:SetCore("SendNotification", { Title = "Warning", Text = "Atlas setup failed: executor missing required APIs.", Duration = 10 })
-			end)
-			warn("[Atlas] gameApi.Setup failed 5 times, aborting")
-			return
-		end
-	end
+local setupAttempts = 0
+while not (not (setupAttempts < 5) or not (not pcall(gameApi.SetupSecureCall) or not pcall(gameApi.Setup, gameApi))) do
+	task.wait(0.1)
+	setupAttempts += 1
+end
+if setupAttempts == 5 then
+	local StarterGui = getService("StarterGui")
+	return StarterGui:SetCore("SendNotification", { Title = "Warning", Text = "Your executor is not supported.", Duration = 10 })
+end
 do
-	local playerStats = gameApi:Cache() or {}
+	local playerStats = gameApi:Cache()
 	local userId = playerStats.UserId
 	local loadTime = playerStats.LoadTime
-	-- NOTE: this used to `return` on a nil cache, which killed every UI section
-	-- that is built after Setup. Now it just disables the per-user paths instead.
-	local userFlag = nil
-	if userId
-		and tonumber(tostring(userId)) == userId
-		and not (userId <= 0)
-		and not (not loadTime or tonumber(tostring(loadTime)) ~= loadTime)
-		and not (not (loadTime < 1.7e9) and not (loadTime > 2e9
-			or not (not isfunctionhooked(os.time)
-				and not isfunctionhooked(os.date)
-				and not isfunctionhooked(gameApi.ClientStatCache.Get)))) then
-		userFlag = userIdFlags[userId]
+	if not userId or tonumber(tostring(userId)) ~= userId or not (not (userId <= 0) and not (not loadTime or tonumber(tostring(loadTime)) ~= loadTime or not (not (loadTime < 1.7e9) and not (loadTime > 2e9 or not (not isfunctionhooked(os.time) and not isfunctionhooked(os.date) and not isfunctionhooked(gameApi.ClientStatCache.Get)))))) then
+		return
 	end
+	local userFlag = userIdFlags[userId]
 	if userFlag == true then
-		loadstring(game:HttpGet("https://raw.githubusercontent.com/PLACEHOLDER/PLACEHOLDER/main/main.script"))()
+		-- AncientHUB loader removed: the URL is gone, nothing is downloaded or executed here.
 		task.wait(60)
 		local function decoyMain()
 			local decoyKey = string.rep(" ", 8)
@@ -28534,21 +27967,9 @@ do
 				Farming.AddSwitch("Auto Dig", function(n)
 					if n and not threads:Get("autodig") then
 						threads:Add("autodig", function()
-							local warned = false
 							while RunService.Heartbeat:Wait() do
 								if not state.stop and not state.stopdig then
-									if type(gameApi.LocalCollect) == "function" then
-										local okDig, digError = pcall(function()
-											secureCall(gameApi.LocalCollect)
-										end)
-										if not okDig and not warned then
-											warned = true
-											warn("[Atlas] auto dig failed: " .. tostring(digError))
-										end
-									elseif not warned then
-										warned = true
-										warn("[Atlas] auto dig disabled: Collectors.LocalCollect is not loaded")
-									end
+									secureCall(gameApi.LocalCollect)
 									task.wait(0.1)
 								end
 							end
@@ -28557,131 +27978,6 @@ do
 						threads:Cancel("autodig")
 					end
 				end, "autofarm", "autodig")
-				local cloudInfoLabel = nil
-				pcall(function()
-					local cloudFolder = farming.AddFolder("Cloud Vials")
-					cloudInfoLabel = cloudFolder.AddLabel("Cloud Vials: ? | next: -")
-					cloudFolder.AddSwitch("Only In Current Field", nil, "cloudvials", "samefieldonly")
-					cloudFolder.AddSwitch("Slot 1 Enabled", nil, cfg.cloudvials.slot1, "enabled")
-					cloudFolder.AddDropdown("Slot 1 Field", availableFields, true, nil, cfg.cloudvials.slot1, "field", { Field = true, Width = 250 })
-					cloudFolder.AddSlider("Slot 1 Interval (min)", nil, 1, 15, cfg.cloudvials.slot1, "interval", { Left = true })
-					cloudFolder.AddSwitch("Slot 2 Enabled", nil, cfg.cloudvials.slot2, "enabled")
-					cloudFolder.AddDropdown("Slot 2 Field", availableFields, true, nil, cfg.cloudvials.slot2, "field", { Field = true, Width = 250 })
-					cloudFolder.AddSlider("Slot 2 Interval (min)", nil, 1, 15, cfg.cloudvials.slot2, "interval", { Left = true })
-				end)
-				local function cloudVialSlotReady(slotIndex, slotCfg, now)
-					if not slotCfg or not slotCfg.enabled then
-						return false
-					end
-					local targetField = slotCfg.field
-					if not targetField or not availableFields[targetField] then
-						return false
-					end
-					if cfg.cloudvials.samefieldonly and currentFieldName ~= targetField then
-						return false
-					end
-					local intervalMinutes = tonumber(slotCfg.interval) or 2
-					if intervalMinutes < 1 then
-						intervalMinutes = 1
-					end
-					local lastUsed = tonumber(cache["CloudVialSlot" .. slotIndex .. "At"]) or 0
-					return (now - lastUsed) >= intervalMinutes * 60
-				end
-				local function cloudVialUse(slotIndex, slotCfg)
-					local targetField = slotCfg.field
-					local previousField = currentFieldName
-					if not cfg.cloudvials.samefieldonly then
-						pcall(function()
-							reportStatus(3, targetField)
-							setField(targetField)
-							goToField()
-						end)
-						local movedAt = os.clock()
-						while os.clock() - movedAt < 20 do
-							local inField = false
-							pcall(function()
-								inField = getFieldAt(getRootPart().Position) == workspace.FlowerZones[targetField]
-							end)
-							if inField then
-								break
-							end
-							RunService.Heartbeat:Wait()
-						end
-					end
-					local used = nil
-					pcall(function()
-						used = inventory:Use("Cloud Vial")
-					end)
-					if used then
-						logger.log("Used Cloud Vial in", targetField, "(slot " .. slotIndex .. ")")
-					else
-						logger.warn("Cloud Vial not used (none left?) slot " .. slotIndex)
-					end
-					cache["CloudVialSlot" .. slotIndex .. "At"] = os.time()
-					saveConfig(true)
-					if not cfg.cloudvials.samefieldonly and previousField and previousField ~= targetField then
-						pcall(function()
-							setField(previousField)
-						end)
-					end
-				end
-				local function cloudVialNextIn()
-					local now = os.time()
-					local best = nil
-					for index, slotCfg in ipairs({ cfg.cloudvials.slot1, cfg.cloudvials.slot2 }) do
-						if slotCfg and slotCfg.enabled and slotCfg.field and availableFields[slotCfg.field] then
-							local intervalMinutes = tonumber(slotCfg.interval) or 2
-							if intervalMinutes < 1 then
-								intervalMinutes = 1
-							end
-							local lastUsed = tonumber(cache["CloudVialSlot" .. index .. "At"]) or 0
-							local left = math.max(0, intervalMinutes * 60 - (now - lastUsed))
-							if not best or left < best then
-								best = left
-							end
-						end
-					end
-					return best
-				end
-				cloudFolder.AddSwitch("Use Cloud Vials", function(on)
-					if on then
-						if not threads:Get("cloudvials") then
-							threads:Add("cloudvials", function()
-								local lastInfo = 0
-								while cfg.cloudvials.enabled and not state.stop do
-									local now = os.time()
-									for index, slotCfg in ipairs({ cfg.cloudvials.slot1, cfg.cloudvials.slot2 }) do
-										local okRun, runError = pcall(function()
-											if cloudVialSlotReady(index, slotCfg, now) then
-												cloudVialUse(index, slotCfg)
-											end
-										end)
-										if not okRun then
-											logger.warn("Cloud Vial slot " .. index .. " error: " .. tostring(runError))
-										end
-									end
-									if os.clock() - lastInfo > 5 then
-										lastInfo = os.clock()
-										pcall(function()
-											local owned = inventory:Fetch() or {}
-											local count = owned["Cloud Vial"] or 0
-											local nextIn = cloudVialNextIn()
-											local nextText = "-"
-											if nextIn then
-												nextText = math.floor(nextIn / 60) .. "m " .. (nextIn % 60) .. "s"
-											end
-											cloudInfoLabel.Text = "Cloud Vials: " .. tostring(count) .. " | next: " .. nextText
-										end)
-									end
-									task.wait(2)
-								end
-								threads.list["cloudvials"] = nil
-							end)
-						end
-					else
-						threads:Cancel("cloudvials")
-					end
-				end, "cloudvials", "enabled")
 				Farming.Toggle(true)
 				controls.Farming = Farming
 				farmFolder.AddSwitch("Auto Pop Star", nil, "autofarm", "autopopstar")
@@ -30725,8 +30021,8 @@ more accurate dodging]],
 				dynamicSpeedSwitch.Set(cfg.vars.walkdynamic)
 				Movement2.Set(cfg.vars.movement)
 				Movement.AddButton("Copy Discord", function()
-					setclipboard("Atlas 1.2 Xeno Support")
-					ui.Notify("Atlas", "Copied! (Atlas 1.2 Xeno Support)")
+					setclipboard("Atlas 1.0 Surgut")
+					ui.Notify("Atlas", "Copied! (Atlas 1.0 Surgut)")
 				end, 96)
 				Movement.Toggle(true)
 				local config2 = state.config
@@ -30813,7 +30109,7 @@ more accurate dodging]],
 					else
 						writefile("atlas-" .. localPlayer.Name .. ".json", config2 .. ".json")
 						task.wait(0.1)
-						loadstring(game:HttpGet(getUrl("script.lua")))()
+						ui.Notify("Config", "Selected " .. config2 .. ". Re-execute the script to apply.")
 					end
 				end, 86)
 				Settings.AddHorizontalAlignment(10)
@@ -31641,8 +30937,6 @@ Are you sure you want to enable it?]])
 		end
 	end
 end
--- blacklist kick removed: it fired for every account missing from userIdFlags,
--- which is exactly what produced "You are blacklisted (Error Code: 267)".
 task.wait(2)
 local function decoyMain()
 	local decoyKey = string.rep(" ", 8)
