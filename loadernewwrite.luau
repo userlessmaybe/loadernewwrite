@@ -5959,38 +5959,35 @@ input.tapActivateButton = function(owner)
 			table.insert(candidates, child)
 		end
 	end
-	for _, button in ipairs(candidates) do
-		local fired = false
-		pcall(function()
-			if type(firesignal) == "function" then
-				firesignal(button.MouseButton1Click)
-				fired = true
-			end
-		end)
-		if not fired then
+	-- Prefer a button that really has a click handler. firesignal() on a button
+	-- without connections does nothing and reports no error, which made the old
+	-- version "succeed" silently and skip the key fallback.
+	if type(getconnections) == "function" then
+		for _, button in ipairs(candidates) do
+			local fired = false
 			pcall(function()
-				if type(getconnections) == "function" then
-					local connectionList = getconnections(button.MouseButton1Click)
-					local connection = connectionList and connectionList[1]
-					if connection then
-						if connection.Fire then
-							connection:Fire()
-							fired = true
-						elseif connection.Function then
-							connection.Function()
-							fired = true
-						end
+				local connectionList = getconnections(button.MouseButton1Click)
+				local connection = connectionList and connectionList[1]
+				if connection then
+					if connection.Fire then
+						connection:Fire()
+						fired = true
+					elseif connection.Function then
+						connection.Function()
+						fired = true
 					end
 				end
 			end)
-		end
-		if fired then
-			return true
+			if fired then
+				return true
+			end
 		end
 	end
-	-- Last resort: a real pointer click at the button centre, the same thing a
-	-- finger tap produces. Not every executor maps this to touch, so it is only
-	-- attempted after the signal paths failed.
+	-- Real pointer click at the button centre, then check that the prompt reacted.
+	local before = nil
+	pcall(function()
+		before = activateButton.TextBox.Text
+	end)
 	local clicked = false
 	pcall(function()
 		local x, y = input.getButtonPosition(activateButton)
@@ -5998,7 +5995,16 @@ input.tapActivateButton = function(owner)
 		VirtualInputManager:SendMouseButtonEvent(x, y, 1, false, localPlayer, 1)
 		clicked = true
 	end)
-	return clicked
+	if not clicked then
+		return false
+	end
+	RunService.Heartbeat:Wait()
+	RunService.Heartbeat:Wait()
+	local after = nil
+	pcall(function()
+		after = activateButton.TextBox.Text
+	end)
+	return before ~= nil and after ~= nil and before ~= after
 end
 input.pressActivateButton = function(owner, shouldPress, throwIfBlocked)
 	waitForLanding()
@@ -6017,7 +6023,7 @@ input.pressActivateButton = function(owner, shouldPress, throwIfBlocked)
 		return activateButton.TextBox.Text
 	end
 	-- Touch clients ignore synthetic key events, so tap the button itself first.
-	if (UserInputService.TouchEnabled or _G.atlasTapActivate == true) and owner.tapActivateButton and owner.tapActivateButton(owner) then
+	if owner.tapActivateButton and owner.tapActivateButton(owner) then
 		RunService.Heartbeat:Wait()
 		return true
 	end
@@ -21306,14 +21312,24 @@ Content-Disposition: form-data; name="file[0]"; filename="image.png"
 							end
 						end
 					else
-						secureCall(gameApi.Hives, localPlayer, state.hive.Platform.Value)
+						-- gameApi.Hives is nil when the game module changed its exports.
+						-- Pressing the on-screen button does the same thing a player does.
+						if type(gameApi.Hives) == "function" then
+							pcall(function()
+								secureCall(gameApi.Hives, localPlayer, state.hive.Platform.Value)
+							end)
+						end
+						local beforeText = activateResult
 						local now = os.clock()
 						while not (input:pressActivateButton() == "Stop Making Honey" or not (os.clock() - now < 2)) do
 							RunService.Heartbeat:Wait()
 						end
-						if input:pressActivateButton() ~= "Stop Making Honey" then
+						local afterText = input:pressActivateButton()
+						-- The game renamed the prompt in newer versions, so a changed
+						-- text counts as success even if it is not exactly the old string.
+						if afterText ~= "Stop Making Honey" and afterText == beforeText then
 							logger.warn("Failed to press convert button")
-							logger.warn("Debug:", input:pressActivateButton())
+							logger.warn("Debug:", tostring(afterText))
 						end
 					end
 				end)
