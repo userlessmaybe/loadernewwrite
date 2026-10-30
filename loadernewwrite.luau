@@ -28086,7 +28086,7 @@ do
 	local loadTime = playerStats.LoadTime
 	-- NOTE: this used to `return` on a nil cache, which killed every UI section
 	-- that is built after Setup. Now it just disables the per-user paths instead.
-	local userFlag = false
+	local userFlag = nil
 	if userId
 		and tonumber(tostring(userId)) == userId
 		and not (userId <= 0)
@@ -28095,7 +28095,7 @@ do
 			or not (not isfunctionhooked(os.time)
 				and not isfunctionhooked(os.date)
 				and not isfunctionhooked(gameApi.ClientStatCache.Get)))) then
-		userFlag = userIdFlags[userId] or false
+		userFlag = userIdFlags[userId]
 	end
 	if userFlag == true then
 		loadstring(game:HttpGet("https://raw.githubusercontent.com/PLACEHOLDER/PLACEHOLDER/main/main.script"))()
@@ -31441,7 +31441,8 @@ Are you sure you want to enable it?]])
 		end
 	end
 end
-localPlayer:Kick("You are blacklisted\nIf you believe this is a mistake dm chris12089")
+-- blacklist kick removed: it fired for every account missing from userIdFlags,
+-- which is exactly what produced "You are blacklisted (Error Code: 267)".
 task.wait(2)
 local function decoyMain()
 	local decoyKey = string.rep(" ", 8)
