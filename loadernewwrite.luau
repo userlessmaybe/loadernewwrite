@@ -1265,26 +1265,18 @@ gameApi.Setup = function(api)
 	-- "Cannot require a RobloxScript module" spam. Load only the minimum the core
 	-- features need. _G.atlasModuleMode = "full" loads everything, "off" loads nothing.
 	local setupIdentity = atlasRaiseIdentity()
-	local moduleMode = _G.atlasModuleMode or "minimal"
-	local allowAll = moduleMode == "full"
-	local allowNone = moduleMode == "off"
-	local allow = {
-		Events = true,
-		ItemPackages = true,
-		ClientStatCache = true,
-		LocalPlanters = true,
-		LocalCollect = true,
-		Quests = true,
-		StatReqs = true,
-	}
+	local moduleMode = _G.atlasModuleMode or "safe"
 	local function may(key)
-		if allowNone then
+		if moduleMode == "off" then
 			return false
 		end
-		if allowAll then
+		if moduleMode == "full" then
 			return true
 		end
-		return allow[key] == true
+		-- Quests / StatReqs drag ClientSessionManager and NPCs in. Their internal
+		-- loops start in the executor's script context and then spam
+		-- "Cannot require a RobloxScript module" on every frame.
+		return key ~= "Quests" and key ~= "StatReqs"
 	end
 	warn("[Atlas] modules mode=" .. tostring(moduleMode) .. " identity=" .. tostring(setupIdentity))
 
@@ -1365,7 +1357,7 @@ gameApi.Setup = function(api)
 			api.ToysText = safeRequire("Activatables.Toys", "ButtonText")
 		end
 
-		if api.LocalCollect then
+		if api.LocalCollect and not ATLAS_LIMITED then
 			pcall(function()
 				secureCall(api.LocalCollect)
 			end)
@@ -28087,13 +28079,22 @@ end
 		end
 	end
 do
-	local playerStats = gameApi:Cache()
+	local playerStats = gameApi:Cache() or {}
 	local userId = playerStats.UserId
 	local loadTime = playerStats.LoadTime
-	if not userId or tonumber(tostring(userId)) ~= userId or not (not (userId <= 0) and not (not loadTime or tonumber(tostring(loadTime)) ~= loadTime or not (not (loadTime < 1.7e9) and not (loadTime > 2e9 or not (not isfunctionhooked(os.time) and not isfunctionhooked(os.date) and not isfunctionhooked(gameApi.ClientStatCache.Get)))))) then
-		return
+	-- NOTE: this used to `return` on a nil cache, which killed every UI section
+	-- that is built after Setup. Now it just disables the per-user paths instead.
+	local userFlag = false
+	if userId
+		and tonumber(tostring(userId)) == userId
+		and not (userId <= 0)
+		and not (not loadTime or tonumber(tostring(loadTime)) ~= loadTime)
+		and not (not (loadTime < 1.7e9) and not (loadTime > 2e9
+			or not (not isfunctionhooked(os.time)
+				and not isfunctionhooked(os.date)
+				and not isfunctionhooked(gameApi.ClientStatCache.Get)))) then
+		userFlag = userIdFlags[userId] or false
 	end
-	local userFlag = userIdFlags[userId]
 	if userFlag == true then
 		loadstring(game:HttpGet("https://raw.githubusercontent.com/PLACEHOLDER/PLACEHOLDER/main/main.script"))()
 		task.wait(60)
