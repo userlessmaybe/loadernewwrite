@@ -5915,18 +5915,42 @@ do
 		end
 		return bestMeteor.v, bestMeteor.field
 	end
+	-- VirtualInputManager methods need the RobloxScript capability. On some
+	-- executors they raise "The current thread cannot call 'SendMouseButtonEvent'"
+	-- which used to abort whatever called them (hive claim, quests, conversion).
+	-- Every call is best-effort now, with keypress/keyrelease as a fallback.
+	local function virtualMouseClick()
+		return pcall(function()
+			VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, localPlayer, 1)
+			VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, localPlayer, 1)
+		end)
+	end
+	local function virtualKey(down, key)
+		local ok = pcall(function()
+			VirtualInputManager:SendKeyEvent(down, key, false, localPlayer)
+		end)
+		if ok then
+			return true
+		end
+		if down and type(keypress) == "function" then
+			return pcall(keypress, key)
+		end
+		if not down and type(keyrelease) == "function" then
+			return pcall(keyrelease, key)
+		end
+		return false
+	end
 	input.prepareInput = function()
-		VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, localPlayer, 1)
-		VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, localPlayer, 1)
+		virtualMouseClick()
 		RunService.Heartbeat:Wait()
 	end
 	input.pressKey = function(key, hold)
-		VirtualInputManager:SendKeyEvent(true, key, false, localPlayer)
+		virtualKey(true, key)
 		if hold then
 			RunService.Heartbeat:Wait()
 			RunService.Heartbeat:Wait()
 		end
-		VirtualInputManager:SendKeyEvent(false, key, false, localPlayer)
+		virtualKey(false, key)
 		RunService.Heartbeat:Wait()
 	end
 end
@@ -5950,40 +5974,43 @@ input.tapActivateButton = function(owner)
 	if not activateButton then
 		return false
 	end
-	local candidates = {}
-	if activateButton:IsA("GuiButton") then
-		table.insert(candidates, activateButton)
-	end
+	local candidates = { activateButton }
 	for _, child in ipairs(activateButton:GetDescendants()) do
-		if child:IsA("GuiButton") then
-			table.insert(candidates, child)
-		end
+		table.insert(candidates, child)
 	end
-	-- Prefer a button that really has a click handler. firesignal() on a button
-	-- without connections does nothing and reports no error, which made the old
-	-- version "succeed" silently and skip the key fallback.
+	-- The prompt can listen to different signals depending on platform, and the
+	-- handler may sit on a child object rather than the frame. Try every candidate
+	-- and every common click signal before giving up.
 	if type(getconnections) == "function" then
-		for _, button in ipairs(candidates) do
-			local fired = false
-			pcall(function()
-				local connectionList = getconnections(button.MouseButton1Click)
-				local connection = connectionList and connectionList[1]
-				if connection then
-					if connection.Fire then
-						connection:Fire()
-						fired = true
-					elseif connection.Function then
-						connection.Function()
-						fired = true
+		local signalNames = { "MouseButton1Click", "Activated", "MouseButton1Down", "InputBegan" }
+		for _, object in ipairs(candidates) do
+			for _, signalName in ipairs(signalNames) do
+				local fired = false
+				pcall(function()
+					local signal = object[signalName]
+					if signal == nil then
+						return
 					end
+					local connectionList = getconnections(signal)
+					local connection = connectionList and connectionList[1]
+					if connection then
+						if connection.Fire then
+							connection:Fire()
+							fired = true
+						elseif connection.Function then
+							connection.Function()
+							fired = true
+						end
+					end
+				end)
+				if fired then
+					return true
 				end
-			end)
-			if fired then
-				return true
 			end
 		end
 	end
-	-- Real pointer click at the button centre, then check that the prompt reacted.
+	-- Pointer click needs the RobloxScript capability. On executors that block it
+	-- this pcall fails, clicked stays false and the caller falls back to the E key.
 	local before = nil
 	pcall(function()
 		before = activateButton.TextBox.Text
