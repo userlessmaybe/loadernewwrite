@@ -5324,13 +5324,31 @@ do
 		if cfg.misc.autorejoin2 then
 			task.wait(3)
 			TeleportService:TeleportCancel()
-			TeleportService:Teleport(game.PlaceId, localPlayer)
+			-- A private server cannot be re-joined with a plain Teleport(placeId):
+			-- it silently fails. Use the stored PrivateServerId instead.
+			if game.PrivateServerId ~= "" then
+				pcall(function()
+					TeleportService:TeleportToPrivateServer(game.PlaceId, game.PrivateServerId, { localPlayer })
+				end)
+			else
+				pcall(function()
+					TeleportService:Teleport(game.PlaceId, localPlayer)
+				end)
+			end
 		end
 	end))
 	connections:Add("reconnect", TeleportService.TeleportInitFailed:Connect(function()
 		task.wait(3)
 		TeleportService:TeleportCancel()
-		TeleportService:Teleport(game.PlaceId, localPlayer)
+		if game.PrivateServerId ~= "" then
+			pcall(function()
+				TeleportService:TeleportToPrivateServer(game.PlaceId, game.PrivateServerId, { localPlayer })
+			end)
+		else
+			pcall(function()
+				TeleportService:Teleport(game.PlaceId, localPlayer)
+			end)
+		end
 	end))
 	connections:Add("particles", workspace.Particles.ChildAdded:Connect(function(n)
 		local L = n.Name
@@ -5877,6 +5895,64 @@ input.pressButton = function(owner, button, v63, v64, useActivated)
 	end
 	RunService.Heartbeat:Wait()
 end
+-- Taps the on-screen ActivateButton instead of synthesising the E key.
+-- On mobile clients the game listens to touch on the button, so SendKeyEvent
+-- silently does nothing and hive/quest interactions never register.
+input.tapActivateButton = function(owner)
+	local activateButton = gameGui.ActivateButton
+	if not activateButton then
+		return false
+	end
+	local candidates = {}
+	if activateButton:IsA("GuiButton") then
+		table.insert(candidates, activateButton)
+	end
+	for _, child in ipairs(activateButton:GetDescendants()) do
+		if child:IsA("GuiButton") then
+			table.insert(candidates, child)
+		end
+	end
+	for _, button in ipairs(candidates) do
+		local fired = false
+		pcall(function()
+			if type(firesignal) == "function" then
+				firesignal(button.MouseButton1Click)
+				fired = true
+			end
+		end)
+		if not fired then
+			pcall(function()
+				if type(getconnections) == "function" then
+					local connectionList = getconnections(button.MouseButton1Click)
+					local connection = connectionList and connectionList[1]
+					if connection then
+						if connection.Fire then
+							connection:Fire()
+							fired = true
+						elseif connection.Function then
+							connection.Function()
+							fired = true
+						end
+					end
+				end
+			end)
+		end
+		if fired then
+			return true
+		end
+	end
+	-- Last resort: a real pointer click at the button centre, the same thing a
+	-- finger tap produces. Not every executor maps this to touch, so it is only
+	-- attempted after the signal paths failed.
+	local clicked = false
+	pcall(function()
+		local x, y = input.getButtonPosition(activateButton)
+		VirtualInputManager:SendMouseButtonEvent(x, y, 1, true, localPlayer, 1)
+		VirtualInputManager:SendMouseButtonEvent(x, y, 1, false, localPlayer, 1)
+		clicked = true
+	end)
+	return clicked
+end
 input.pressActivateButton = function(owner, shouldPress, throwIfBlocked)
 	waitForLanding()
 	local activateButton = gameGui.ActivateButton
@@ -5892,6 +5968,11 @@ input.pressActivateButton = function(owner, shouldPress, throwIfBlocked)
 	end
 	if not shouldPress then
 		return activateButton.TextBox.Text
+	end
+	-- Touch clients ignore synthetic key events, so tap the button itself first.
+	if (UserInputService.TouchEnabled or _G.atlasTapActivate == true) and owner.tapActivateButton and owner.tapActivateButton(owner) then
+		RunService.Heartbeat:Wait()
+		return true
 	end
 	owner.prepareInput()
 	owner.pressKey(Enum.KeyCode.E)
@@ -28058,6 +28139,33 @@ if isfile("atlasplanters-" .. localPlayer.Name .. ".json") then
 		planterInfo.timers = timers
 	end
 end
+	-- Config sanity pass: an imported or hand-edited config may hold a boolean
+	-- where the runtime indexes a table. Without this, whole features die on the
+	-- first use. Example: cfg.boosters.allowed = false makes toyUse.Do throw when
+	-- a toy reports "discover 5 blue bee types", and Auto Toys stops doing anything.
+	do
+		local tableFields = {
+			{ cfg.boosters, "allowed" },
+			{ cfg.toys, "materials2" },
+			{ cfg.autoquest, "allowedplanters" },
+			{ cfg.misc, "bqbuyconf" },
+			{ cfg.rbc, "buydrives" },
+			{ cfg.rbc, "usedrives" },
+			{ cfg.autoquest, "claim2" },
+		}
+		for _, entry in ipairs(tableFields) do
+			local parent, key = entry[1], entry[2]
+			if type(parent) == "table" and type(parent[key]) ~= "table" then
+				parent[key] = {}
+			end
+		end
+		if type(cfg.autofarm.prioritytokens) ~= "table" then
+			cfg.autofarm.prioritytokens = false
+		end
+		if type(cfg.hive.beetypes) ~= "table" then
+			cfg.hive.beetypes = false
+		end
+	end
 	local setupAttempts = 0
 	-- Xeno/Solara: skip game cosmetic modules entirely in Setup, call Setup once from main thread
 	if ATLAS_LIMITED then
